@@ -1,0 +1,23 @@
+Training
+node --max-old-space-size=8192 train.js
+
+Reviewing
+node review.js
+node reviewHuman.js
+
+Server
+kill -9 $(lsof -t -i:8501)
+streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+
+Properties
+Study
+Parallel game coats: parallel
+Simulation num:      simsN
+c_num:               cP
+Train hours:         trainingHours
+Train games:         matches
+Train vs Random bot: vsRandom
+
+Review
+Simulation num:      reviewSimsN
+Review games:        reviewMatches
