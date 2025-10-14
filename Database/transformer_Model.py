@@ -41,21 +41,14 @@ class TransformerBlock(layers.Layer):
         super().__init__(**kwargs)
         ff_dim = d_model * 4
         self.att = layers.MultiHeadAttention(num_heads=num_heads, key_dim=d_model//num_heads)
-        self.ffn = keras.Sequential(
-            [layers.Dense(ff_dim, activation='gelu'), layers.Dense(d_model),]
-        )
+        self.ffn = keras.Sequential([layers.Dense(ff_dim, activation='gelu'), layers.Dense(d_model),])
         self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
         self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
         self.dropout1 = layers.Dropout(rate)
         self.dropout2 = layers.Dropout(rate)
 
     def call(self, input, training=False):
-        # Consistently compute in float32 within the block for stability.
         x_f32 = tf.cast(input, tf.float32)
-
-        input_shape = tf.shape(x_f32)
-        seq_len = input_shape[1]
-        causal_mask = self.create_causal_mask(seq_len)
 
         # Multi-Head Attention
         normed_inputs = self.layernorm1(x_f32)
@@ -63,28 +56,22 @@ class TransformerBlock(layers.Layer):
             query=normed_inputs,
             value=normed_inputs,
             key=normed_inputs,
-            attention_mask=causal_mask,
             training=training
         )
         attn_output = self.dropout1(attn_output, training=training)
-        x_f32 = x_f32 + tf.cast(attn_output, tf.float32)  # Residual connection 1
+        x_f32 = x_f32 + tf.cast(attn_output, tf.float32)  # Res 1
 
         # Feed Forward Network
         normed_x = self.layernorm2(x_f32)
         ffn_output = self.ffn(normed_x)
         ffn_output = self.dropout2(ffn_output, training=training)
-        x_f32 = x_f32 + tf.cast(ffn_output, tf.float32)  # Residual connection 2
+        x_f32 = x_f32 + tf.cast(ffn_output, tf.float32)  # Res 2
 
-        # Cast back to the original input dtype only at the very end.
         return tf.cast(x_f32, input.dtype)
 
-    def create_causal_mask(self, size):
-        mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
-        return tf.cast(mask, tf.bool)
 
-
-def build_model(input_shape=(8, 8, 2), d_model=128, num_transformer_blocks=4, num_heads=4):
-    inputs = layers.Input(shape=input_shape, dtype=tf.int32)
+def build_model(input_shape=(8, 8, 2), d_model=256, num_transformer_blocks=6, num_heads=8):
+    inputs = layers.Input(shape=input_shape, dtype=tf.float32)
     x = layers.Reshape((64, 2))(inputs)
     x = layers.Dense(d_model)(x)
     x = TokenAndPositionEmbedding(64, d_model)(x)
@@ -99,7 +86,6 @@ def build_model(input_shape=(8, 8, 2), d_model=128, num_transformer_blocks=4, nu
 
     # Value Head
     value_pooled = layers.GlobalAveragePooling1D()(x)
-    # value_hidden = layers.Dense(20, activation="relu")(value_pooled)
     value_head = layers.Dense(1, activation='tanh', name='value', dtype='float32')(value_pooled)
 
     model = models.Model(inputs=inputs, outputs=[policy_head, value_head])

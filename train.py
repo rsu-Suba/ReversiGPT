@@ -14,6 +14,19 @@ from reversi_bitboard_cpp import ReversiBitboard
 from reversi_mcts_cpp import MCTS as MCTS_CPP
 from Database.transformer_Model import TransformerBlock
 
+from config import (
+    NUM_PARALLEL_GAMES,
+    SIMS_N,
+    C_PUCT,
+    TOTAL_GAMES,
+    TRAINING_HOURS,
+    TRAINING_DATA_DIR,
+    CURRENT_GENERATION_DATA_SUBDIR,
+    SAVE_DATA_EVERY_N_GAMES,
+    SELF_PLAY_MODEL_PATH,
+    MCTS_PREDICT_BATCH_SIZE
+)
+
 def _print_numpy_board(board_1d):
     print("  0 1 2 3 4 5 6 7")
     print("-----------------")
@@ -36,19 +49,6 @@ if gpus:
         print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
     except RuntimeError as e:
         print(e)
-
-from config import (
-    NUM_PARALLEL_GAMES,
-    SIMS_N,
-    C_PUCT,
-    TOTAL_GAMES,
-    TRAINING_HOURS,
-    TRAINING_DATA_DIR,
-    CURRENT_GENERATION_DATA_SUBDIR,
-    SAVE_DATA_EVERY_N_GAMES,
-    SELF_PLAY_MODEL_PATH,
-    MCTS_PREDICT_BATCH_SIZE
-)
 
 def board_to_input_planes_tf(board_1d_batch_tf, current_player_batch_tf):
     batch_size = tf.shape(board_1d_batch_tf)[0]
@@ -83,9 +83,7 @@ class TokenAndPositionEmbedding(tf.keras.layers.Layer):
         angle_rads = self.get_angles(tf.range(position, dtype=tf.float32)[:, tf.newaxis],
                                      tf.range(d_model, dtype=tf.float32)[tf.newaxis, :],
                                      d_model)
-        # apply sin to even indices in the array; 2i
         angle_rads_sin = tf.sin(angle_rads[:, 0::2])
-        # apply cos to odd indices in the array; 2i+1
         angle_rads_cos = tf.cos(angle_rads[:, 1::2])
         pos_encoding = tf.concat([angle_rads_sin, angle_rads_cos], axis=-1)
         pos_encoding = pos_encoding[tf.newaxis, ...]
@@ -96,7 +94,7 @@ class TokenAndPositionEmbedding(tf.keras.layers.Layer):
         return pos * angle_rates
 
     def call(self, x):
-        return x + self.pos_encoding[:, :tf.shape(x)[1], :]
+        return x + tf.cast(self.pos_encoding[:, :tf.shape(x)[1], :], dtype=x.dtype)
 
 class ModelWrapper:
     def __init__(self, model_path):
@@ -177,18 +175,14 @@ def run_self_play_game_worker(game_id, model_path, sims_n, c_puct):
         current_player = game_board.current_player
 
     winner = game_board.get_winner()
-    black_stones = game_board.count_set_bits(game_board.black_board)
-    white_stones = game_board.count_set_bits(game_board.white_board)
-    stonesDiff = abs(black_stones - white_stones) / (black_stones + white_stones)
-    value = 2.0 + stonesDiff
     print(f"G{game_id}: Game finish, winner: {winner}")
     for record in game_history:
         if winner == 0:
             record['value'] = 0.0
         elif record['player'] == winner:
-            record['value'] = value / 3
+            record['value'] = 1.0
         else:
-            record['value'] = -(value / 3)
+            record['value'] = -1.0
             
     return game_history
 

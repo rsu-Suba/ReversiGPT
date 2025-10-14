@@ -5,33 +5,10 @@ import math
 import glob
 import json
 import tensorflow as tf
-from tensorflow.keras.callbacks import Callback, EarlyStopping, ReduceLROnPlateau
-
-class RealTimeMetricsLogger(Callback):
-    def __init__(self, filepath):
-        super(RealTimeMetricsLogger, self).__init__()
-        self.filepath = filepath
-        self.metrics_history = []
-        with open(self.filepath, 'w') as f:
-            json.dump([], f)
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        logs['lr'] = self.model.optimizer.lr.numpy()
-        logs['epoch'] = epoch + 1
-        serializable_logs = {k: float(v) for k, v in logs.items()}
-        self.metrics_history.append(serializable_logs)
-        with open(self.filepath, 'w') as f:
-            json.dump(self.metrics_history, f, indent=4)
-
+from tensorflow.keras.callbacks import Callback, EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers.schedules import CosineDecay
 from tensorflow.keras import mixed_precision
 from tqdm import tqdm
-
-mixed_precision.set_global_policy('mixed_float16')
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-# from Database.transformerModel import create_transformer_model
 from transformer_Model import TokenAndPositionEmbedding, TransformerBlock, build_model   
 from config import (
     TRAINING_DATA_DIR,
@@ -42,7 +19,8 @@ from config import (
     learning_rate
 )
 
-REALTIME_METRICS_FILE = "realtime_training_metrics.json"
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+mixed_precision.set_global_policy('mixed_float16')
 
 def _parse_function(example_proto):
     feature_description = {
@@ -163,19 +141,28 @@ if __name__ == "__main__":
     steps_per_epoch = math.ceil(total_train_samples / BATCH_SIZE)
     decay_steps = steps_per_epoch * EPOCHS
 
-    # lr_schedule = CosineDecay(
-    #     initial_learning_rate=initial_learning_rate,
-    #     decay_steps=decay_steps,
-    #     alpha=0.000005
-    # )
+    lr_schedule = CosineDecay(
+         initial_learning_rate=initial_learning_rate,
+         decay_steps=decay_steps,
+         alpha=0.000005
+     )
+    
+    model_checkpoint_callback = ModelCheckpoint(
+        filepath=TRAINED_MODEL_SAVE_PATH,
+        save_weights_only=True,
+        monitor='val_loss',
+        mode='min',
+        save_best_only=True,
+        verbose=1
+    )
 
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=initial_learning_rate, clipnorm=1.0),
+        optimizer=tf.keras.optimizers.AdamW(learning_rate=lr_schedule, clipnorm=1.0, weight_decay=0.25),
         loss={
-            'policy': tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.08284473485358701),
+            'policy': tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.026782207663537425),
             'value': 'mean_squared_error'
         },
-        loss_weights={'policy': 1.0, 'value': 0.7823081461391925},
+        loss_weights={'policy': 1.0, 'value': 1.0635380642004533},
         metrics={
             'policy': [tf.keras.metrics.TopKCategoricalAccuracy(k=1, name='1_accu'), tf.keras.metrics.TopKCategoricalAccuracy(k=5, name='5_accu')],
             'value': 'mae'
@@ -192,7 +179,10 @@ if __name__ == "__main__":
         steps_per_epoch=steps_per_epoch,
         validation_data=val_dataset,
         validation_steps=math.ceil(total_val_samples / BATCH_SIZE) if val_dataset else None,
-        callbacks=[early_stopping]# , reduce_lr]
+        callbacks=[
+            early_stopping,
+            model_checkpoint_callback
+        ]
     )
 
     print("\n--- Train finish -> Save new model ---")

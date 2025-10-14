@@ -8,7 +8,7 @@ from reversi_bitboard_cpp import ReversiBitboard
 
 NUM_GAMES_TO_PLAY = Play_Games_Num
 MCTS_SIMS_PER_MOVE = R_SIMS_N
-MODEL_PATH = './Database/models/Transformer/1G_trained.h5'
+MODEL_PATH = Model_Path
 
 def board_to_input_planes_tf(board_1d_tf, current_player_tf):
     player_plane = tf.zeros((8, 8), dtype=tf.float32)

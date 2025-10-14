@@ -14,8 +14,8 @@ from Database.trainModel import create_dataset, count_tfrecord_samples
 from config import TRAINING_DATA_DIR, CURRENT_GENERATION_DATA_SUBDIR, BATCH_SIZE, EPOCHS
 
 def objective(trial):
-    learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-2, log=True)
-    optimizer_name = trial.suggest_categorical('optimizer', ['Adam', 'SGD'])
+    learning_rate = trial.suggest_float('learning_rate', 5e-6, 1e-2, log=True)
+    optimizer_name = trial.suggest_categorical('optimizer', ['Adam', 'AdamW'])
     label_smoothing = trial.suggest_float('label_smoothing', 0.0, 0.3)
     value_loss_weight = trial.suggest_float('value_loss_weight', 0.5, 1.5)
 
@@ -46,18 +46,18 @@ def objective(trial):
     if optimizer_name == 'Adam':
         optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     else:
-        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
+        optimizer = tf.keras.optimizers.AdamW(learning_rate=learning_rate)
 
     model.compile(
         optimizer=optimizer,
         loss={
-            'policy_output': tf.keras.losses.CategoricalCrossentropy(label_smoothing=label_smoothing),
-            'value_output': 'mean_squared_error'
+            'policy': tf.keras.losses.CategoricalCrossentropy(label_smoothing=label_smoothing),
+            'value': 'mean_squared_error'
         },
-        loss_weights={'policy_output': 1.0, 'value_output': value_loss_weight},
+        loss_weights={'policy': 1.0, 'value': 0.9},
         metrics={
-            'policy_output': [tf.keras.metrics.KLDivergence(name='kl_divergence'), tf.keras.metrics.TopKCategoricalAccuracy(k=5, name='top_5_accuracy')],
-            'value_output': 'mean_absolute_error'
+            'policy': [tf.keras.metrics.TopKCategoricalAccuracy(k=1, name='1_accu'), tf.keras.metrics.TopKCategoricalAccuracy(k=5, name='5_accu')],
+            'value': 'mae'
         }
     )
 
