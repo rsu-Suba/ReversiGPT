@@ -1,0 +1,48 @@
+TRAINING_DATA_DIR = './data'
+MODELS_DIR = './models'
+
+# Train
+CURRENT_GENERATION_DATA_SUBDIR = '5G'
+SELF_PLAY_MODEL_PATH = f'{MODELS_DIR}/TF/4G.h5'
+TRAINED_MODEL_SAVE_PATH = f'{MODELS_DIR}/TF/5G.h5'
+TRANSFORMER_MODEL_PATH = f'{MODELS_DIR}/TF/4G.h5'
+
+NUM_PARALLEL_GAMES = 32
+SIMS_N = 4096
+C_PUCT = 1.73
+TOTAL_GAMES = 4000
+TRAINING_HOURS = 0
+SAVE_DATA_EVERY_N_GAMES = 200
+VS_RANDOM = False
+MCTS_PREDICT_BATCH_SIZE = 64
+
+# trainModel
+EPOCHS = 100
+BATCH_SIZE = 1024
+learning_rate = 7e-05
+
+# Inspect
+INSPECT_GENERATION_SUBDIR = '1G'
+NUMS_TO_SHOW = 5
+
+# Review
+# Model_Path = f'{MODELS_DIR}/RN/19G.h5'
+Model_Path = f'{MODELS_DIR}/TF/5G.h5'
+R_SIMS_N = 10
+Play_Games_Num = 100
+
+# compare_models
+NUM_GAMES_COMPARE = 10
+COMPARE_SIMS_N = 20
+Model1_Path = f'{MODELS_DIR}/TF/5G_1.h5'
+Model2_Path = f'{MODELS_DIR}/TF/5G.h5'
+Model1_Name = "TF5.1"
+Model2_Name = "TF5.2"
+
+
+
+# val_loss: 2.61857008934021
+# learning_rate: 2.4011240561262954e-05
+# optimizer: AdamW
+# label_smoothing: 0.04591632998640437
+# value_loss_weight: 0.7042195216571807

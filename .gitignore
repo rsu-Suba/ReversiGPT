@@ -1,2 +1,19 @@
-node_modules/
-*.msgpack
+# Python
+__pycache__/
+*.pyc
+
+# C++
+*.so
+build/
+
+# Data & Models
+data/
+models/
+
+# Logs
+logs/
+*.prof
+*.json
+
+# OS
+.DS_Store

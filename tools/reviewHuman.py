@@ -1,12 +1,20 @@
-import numpy as np
+import sys
+import os
 import random
+import numpy as np
 import tensorflow as tf
-from AI.models.transformer_model import TokenAndPositionEmbedding, TransformerBlock
-from AI.config import R_SIMS_N, C_PUCT, Model_Path, Play_Games_Num
 import math
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
+from AI.models.transformer_model import TokenAndPositionEmbedding, TransformerBlock
+from AI.config import (
+    R_SIMS_N,
+    Model_Path,
+    C_PUCT
+)
 
-NUM_GAMES_TO_PLAY = Play_Games_Num
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
+
 MCTS_SIMS_PER_MOVE = R_SIMS_N
 MODEL_PATH = Model_Path
 
@@ -19,24 +27,6 @@ def board_to_input_planes_tf(board_1d_tf, current_player_tf):
     player_plane += current_player_mask
     opponent_plane += opponent_player_mask
     return tf.stack([player_plane, opponent_plane], axis=-1)
-
-def print_board_from_numpy(board_1d):
-    print("  0 1 2 3 4 5 6 7")
-    for r in range(8):
-        row_str = f"{r}"
-        for c in range(8):
-            piece = board_1d[r * 8 + c]
-            if piece == 1: row_str += "🔴"
-            elif piece == 2: row_str += "⚪️"
-            else: row_str += "🟩"
-        print(row_str)
-
-class RandomAI:
-    def get_move(self, game_board: ReversiBitboard, player):
-        valid_moves = game_board.get_legal_moves()
-        if not valid_moves:
-            return None
-        return random.choice(valid_moves)
 
 class MCTSNode:
     def __init__(self, game_board: ReversiBitboard, player, parent=None, move=None, prior_p=0.0):
@@ -150,106 +140,122 @@ class MCTS:
         best_move = max(self.root.children.keys(), key=lambda move: self.root.children[move].n_visits)
         return best_move, self.root.children[best_move].n_visits, self.root.children[best_move].q_value
 
-def play_game(mcts_ai, random_ai, mcts_player_is_black):
+
+def print_board(board_1d):
+    print("  A B C D E F G H")
+    for r in range(8):
+        row_str = "";
+        for c in range(8):
+            piece = board_1d[r * 8 + c]
+            if piece == 1:
+                row_str += "🔴"
+            elif piece == 2:
+                row_str += "⚪️"
+            else:
+                row_str += "🟩"
+        print(f"{r+1}{row_str}")
+
+def get_human_move(legal_moves):
+    while True:
+        try:
+            move_str = input("Your turn 🫵 (a1, pass): ").strip()
+            if move_str.lower() == "pass":
+                if -1 in legal_moves:
+                    return -1
+                else:
+                    print("❌️Can't pass")
+                    continue
+
+            if len(move_str) != 2:
+                raise ValueError("❌️Invalid move.")
+
+            col_char = move_str[0].upper()
+            row_char = move_str[1]
+
+            if not ('A' <= col_char <= 'H' and '1' <= row_char <= '8'):
+                raise ValueError("❌️Invalid move.")
+
+            col = ord(col_char) - ord('A')
+            row = int(row_char) - 1
+            move = row * 8 + col
+
+            if move not in legal_moves:
+                print(f"❌️Invalid move.: {move_str}")
+                print(f"Pleaceable: {[index_to_coord(m) for m in legal_moves if m != -1]}")
+                continue
+            return move
+        except ValueError as e:
+            print(f"Error: {e}, Enter again")
+        except Exception as e:
+            print(f"Unexpected error: {e}, Enter again")
+
+def index_to_coord(index):
+    if index == -1:
+        return "PASS"
+    row = index // 8
+    col = index % 8
+    return f"{chr(ord('A') + col)}{row + 1}"
+
+def main():
     game_board = ReversiBitboard()
+
+    human_player = random.choice([1, 2])
+    ai_player = 3 - human_player
+
+    human_color = "Black 🔴" if human_player == 1 else "White ⚪️"
+    ai_color = "White ⚪️" if ai_player == 2 else "Black 🔴"
+    print(f"You : {human_color}, AI : {ai_color}")
+
     current_player = 1
-    mcts_q_values = []
+
+    try:
+        with tf.keras.utils.custom_object_scope({'TokenAndPositionEmbedding': TokenAndPositionEmbedding, 'TransformerBlock': TransformerBlock}):
+            model = tf.keras.models.load_model(MODEL_PATH)
+        print(f"Model loaded <- {MODEL_PATH}")
+        mcts_ai = MCTS(model)
+    except Exception as e:
+        print(f"Error while loading model {e}")
+        sys.exit(1)
 
     while not game_board.is_game_over():
-        is_mcts_turn = (current_player == 1 and mcts_player_is_black) or (current_player == 2 and not mcts_player_is_black)
+        turn_player_name = "You" if current_player == human_player else "AI"
+        turn_color = "Black" if current_player == 1 else "White"
+        print(f"\n--- Now turn: {turn_color} ({turn_player_name}) ---")
+        print_board(game_board.board_to_numpy())
 
-        valid_moves = game_board.get_legal_moves()
-        if not valid_moves:
+        legal_moves = game_board.get_legal_moves()
+
+        if not legal_moves:
+            print(f"{turn_color} has no legal moves -> pass")
             game_board.apply_move(-1)
             current_player = 3 - current_player
             continue
 
-        if is_mcts_turn:
+        if current_player == human_player:
+            move = get_human_move(legal_moves)
+        else:
+            print("AI 🤔🤔🤔...")
             search_result = mcts_ai.search(game_board, current_player, MCTS_SIMS_PER_MOVE)
             move = search_result[0] if search_result and search_result[0] is not None else -1
-            q_value = search_result[2] if search_result and search_result[2] is not None else 0.0
-            mcts_q_values.append(q_value)
-        else:
-            move = random_ai.get_move(game_board, current_player)
-
-        if move is None or move == -1:
-            game_board.apply_move(-1)
-            current_player = 3 - current_player
-            continue
+            print(f"AI 😓👍: {index_to_coord(move)}")
 
         game_board.apply_move(move)
         current_player = 3 - current_player
 
-    winner = game_board.get_winner()
-    if winner == 0:
-        result = "draw"
-    elif (winner == 1 and mcts_player_is_black) or (winner == 2 and not mcts_player_is_black):
-        result = "mcts_win"
-    else:
-        result = "random_win"
-    return result, game_board, mcts_q_values
+    print("\n--- Game finish ---")
+    print_board(game_board.board_to_numpy())
 
+    winner = game_board.get_winner()
+    black_stones = game_board.count_set_bits(game_board.black_board)
+    white_stones = game_board.count_set_bits(game_board.white_board)
+    print(f"Scores - Black: {black_stones}, White: {white_stones}")
+
+    if winner == 0:
+        print("Draw")
+    elif winner == human_player:
+        print("You won")
+    else:
+        print("AI won")
 
 if __name__ == "__main__":
-    print("--- AI vs Random bot ---")
-    try:
-        with tf.keras.utils.custom_object_scope({'TokenAndPositionEmbedding': TokenAndPositionEmbedding, 'TransformerBlock': TransformerBlock}):
-            model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-        print(f"Model loaded <- {MODEL_PATH}")
-        mcts_ai = MCTS(model)
-    except Exception as e:
-        print(f"Error while loading model: {e}")
-        exit()
-    random_ai = RandomAI()
-
-    mcts_wins = 0
-    random_wins = 0
-    draws = 0
-    total_mcts_stones = 0
-    total_random_stones = 0
-    all_mcts_q_values = []
-
-    for i in range(NUM_GAMES_TO_PLAY):
-        mcts_is_black = random.choice([True, False])
-        # print(f"\n--- Game {i+1}/{NUM_GAMES_TO_PLAY} | AI: {'Black' if mcts_is_black else 'White'} ---")
-        result, final_board, mcts_q_values = play_game(mcts_ai, random_ai, mcts_is_black)
-        all_mcts_q_values.extend(mcts_q_values)
-
-        black_stones = final_board.count_set_bits(final_board.black_board)
-        white_stones = final_board.count_set_bits(final_board.white_board)
-
-        if mcts_is_black:
-            mcts_score = black_stones
-            random_score = white_stones
-        else:
-            mcts_score = white_stones
-            random_score = black_stones
-
-        total_mcts_stones += mcts_score
-        total_random_stones += random_score
-
-        if result == "mcts_win":
-            mcts_wins += 1
-            # print(f"Game {i+1} result: AI Win")
-        elif result == "random_win":
-            random_wins += 1
-            # print(f"Game {i+1} result: Random bot Win")
-            final_board_numpy = final_board.board_to_numpy()
-            print_board_from_numpy(final_board_numpy)
-        else:
-            draws += 1
-            # print(f"Game {i+1} result: Draw")
-
-        # print(f"Scores - Black: {black_stones}, White: {white_stones}")
-
-    print("\n--- Result ---")
-    print(f"Games: {NUM_GAMES_TO_PLAY}")
-    print(f"AI wins: {mcts_wins} ({((mcts_wins / NUM_GAMES_TO_PLAY) * 100):.2f}%) ")
-    print(f"Bot wins: {random_wins}")
-    print(f"Draws: {draws}")
-    print(f"AI average stones: {total_mcts_stones / NUM_GAMES_TO_PLAY:.2f}")
-    print(f"Random bot average stones: {total_random_stones / NUM_GAMES_TO_PLAY:.2f}")
-    if all_mcts_q_values:
-        print(f"AI average Q value: {np.mean(all_mcts_q_values):.4f}")
-    else:
-        print("No Q value data for AI.")
+    main()

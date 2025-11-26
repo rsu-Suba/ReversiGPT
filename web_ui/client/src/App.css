@@ -1,0 +1,67 @@
+.App {
+  text-align: center;
+  font-family: sans-serif;
+}
+
+.game-info {
+  margin-bottom: 20px;
+}
+
+.winner {
+  font-size: 1.5em;
+  color: green;
+  font-weight: bold;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(8, 60px);
+  grid-template-rows: repeat(8, 60px);
+  gap: 2px;
+  justify-content: center;
+  background-color: #444;
+  border: 5px solid #444;
+}
+
+.cell {
+  background-color: #2a8c2a;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  position: relative; /* For positioning thought-info */
+}
+
+.cell.legal {
+  background-color: #6abf69;
+}
+
+.piece {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+}
+
+.piece.black {
+  background-color: black;
+}
+
+.piece.white {
+  background-color: white;
+}
+
+.thought-info {
+  position: absolute;
+  color: white;
+  font-size: 0.8em;
+  text-align: center;
+  pointer-events: none; /* Make it non-interactive */
+  text-shadow: 1px 1px 2px black;
+}
+
+button {
+  margin-top: 20px;
+  padding: 10px 20px;
+  font-size: 1em;
+  cursor: pointer;
+}

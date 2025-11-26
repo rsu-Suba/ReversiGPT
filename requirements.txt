@@ -2,3 +2,6 @@ tensorflow
 flask
 numpy
 seaborn
+fastapi
+uvicorn[standard]
+websockets
