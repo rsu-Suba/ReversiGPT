@@ -208,7 +208,7 @@ def run_self_play_game_worker(game_id, predictor, sims_n, c_puct):
             current_player = game_board.current_player
             continue
 
-        add_noise = len(game_board.history) < 30
+        add_noise = len(game_board.history) < 12
         root_node = mcts_ai.search(game_board, current_player, sims_n, add_noise)
 
         policy_target = np.zeros(64, dtype=np.float32)
@@ -224,7 +224,7 @@ def run_self_play_game_worker(game_id, predictor, sims_n, c_puct):
             'policy': policy_target.tolist()
         })
 
-        if len(game_board.history) < 30:
+        if len(game_board.history) < 12:
             moves = list(root_node.children.keys())
             visits = [child.n_visits for child in root_node.children.values()]
             if sum(visits) == 0:
@@ -293,7 +293,8 @@ def run_self_play():
                 print(f"Main process: Skipped game due to worker error.")
                 continue
 
-            game_results_buffer.extend(game_history_result)
+            # game_results_buffer.extend(game_history_result)
+            game_results_buffer.append(game_history_result)
             games_played += 1
 
             if games_played > 0 and games_played % SAVE_DATA_EVERY_N_GAMES == 0:

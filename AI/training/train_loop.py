@@ -77,34 +77,22 @@ def _parse_function(example_proto):
 def _preprocess_and_augment(input_planes, policy, value):
     policy = tf.reshape(policy, (8, 8))
     policy_3d = policy[..., tf.newaxis]
+    transform_idx = tf.random.uniform(shape=[], minval=0, maxval=8, dtype=tf.int32)
 
-    transforms = [
-        lambda img, pol: (img, pol),
-        lambda img, pol: (tf.image.flip_left_right(img), tf.image.flip_left_right(pol)),
-        lambda img, pol: (tf.image.flip_up_down(img), tf.image.flip_up_down(pol)),
-        lambda img, pol: (tf.image.flip_left_right(tf.image.flip_up_down(img)), tf.image.flip_left_right(tf.image.flip_up_down(pol))),
-        lambda img, pol: (tf.image.transpose(img), tf.image.transpose(pol)),
-        lambda img, pol: (tf.image.flip_left_right(tf.image.transpose(img)), tf.image.flip_left_right(tf.image.transpose(pol))),
-        lambda img, pol: (tf.image.flip_up_down(tf.image.transpose(img)), tf.image.flip_up_down(tf.image.transpose(pol))),
-        lambda img, pol: (tf.image.flip_left_right(tf.image.flip_up_down(tf.image.transpose(img))), tf.image.flip_left_right(tf.image.flip_up_down(tf.image.transpose(pol))))
-    ]
+    def apply_transform(img, pol, idx):
+        img, pol = tf.cond(idx >= 4, lambda: (tf.image.transpose(img), tf.image.transpose(pol)), lambda: (img, pol))
+        idx = idx % 4
+        img, pol = tf.cond(tf.logical_or(tf.equal(idx, 2), tf.equal(idx, 3)), lambda: (tf.image.flip_up_down(img), tf.image.flip_up_down(pol)), lambda: (img, pol))
+        img, pol = tf.cond(tf.logical_or(tf.equal(idx, 1), tf.equal(idx, 3)), lambda: (tf.image.flip_left_right(img), tf.image.flip_left_right(pol)), lambda: (img, pol))
+        
+        return img, pol
 
-    augmented_images = []
-    augmented_policies = []
-    augmented_values = []
+    img, transformed_pol_3d = apply_transform(input_planes, policy_3d, transform_idx)
+    transformed_pol_2d = tf.squeeze(transformed_pol_3d, axis=-1)
+    
+    transformed_pol_flat = tf.reshape(transformed_pol_2d, (64,))
 
-    for transform_func in transforms:
-        img, transformed_pol_3d = transform_func(input_planes, policy_3d)
-        transformed_pol_2d = tf.squeeze(transformed_pol_3d, axis=-1)
-        augmented_images.append(img)
-        augmented_policies.append(transformed_pol_2d)
-        augmented_values.append(value)
-
-    images = tf.stack(augmented_images)
-    policies = tf.reshape(tf.stack(augmented_policies), (8, 64))
-    values = tf.stack(augmented_values)
-
-    return images, policies, values
+    return img, transformed_pol_flat, value
 
 def create_dataset(tfrecord_files, batch_size, is_training=True, total_samples=None):
     if not tfrecord_files:
@@ -128,7 +116,6 @@ def create_dataset(tfrecord_files, batch_size, is_training=True, total_samples=N
 
     dataset = dataset.map(_parse_function, num_parallel_calls=tf.data.AUTOTUNE)
     dataset = dataset.map(_preprocess_and_augment, num_parallel_calls=tf.data.AUTOTUNE)
-    dataset = dataset.unbatch()
     dataset = dataset.batch(batch_size)
 
     dataset = dataset.map(
@@ -163,19 +150,17 @@ if __name__ == "__main__":
     print(f"Train TFRecord : {len(train_tfrecord_files)}, Val TFRecord : {len(val_tfrecord_files)}")
 
     total_train_samples = count_tfrecord_samples(train_tfrecord_files)
-    total_train_samples *= 8
     train_dataset = create_dataset(train_tfrecord_files, BATCH_SIZE, is_training=True, total_samples=total_train_samples)
-    
+
     val_dataset = None
     total_val_samples = 0
     if val_tfrecord_files:
         total_val_samples = count_tfrecord_samples(val_tfrecord_files)
-        total_val_samples *= 8
         val_dataset = create_dataset(val_tfrecord_files, BATCH_SIZE, is_training=False)
 
     initial_learning_rate = learning_rate
     steps_per_epoch = math.ceil(total_train_samples / BATCH_SIZE)
-    TARGET_DECAY_EPOCHS = 40
+    TARGET_DECAY_EPOCHS = 80
     decay_steps = steps_per_epoch * TARGET_DECAY_EPOCHS
     warmup_epochs = 5
     warmup_steps = warmup_epochs * steps_per_epoch
@@ -204,7 +189,7 @@ if __name__ == "__main__":
         model = build_model()
 
     model.compile(
-        optimizer=tf.keras.optimizers.AdamW(learning_rate=lr_schedule, clipnorm=1.0, weight_decay=0.1),
+        optimizer=tf.keras.optimizers.AdamW(learning_rate=lr_schedule, clipnorm=1.0, weight_decay=0.05),
         loss={
             'policy': tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.028968626957636873),
             'value': 'mean_squared_error'
@@ -219,7 +204,7 @@ if __name__ == "__main__":
     early_stopping = EarlyStopping(
         monitor='val_loss',
         min_delta=1e-5,
-        patience=6,
+        patience=5,
         restore_best_weights=True,
         verbose=1
     )

@@ -10,14 +10,14 @@ from optuna.integration import TFKerasPruningCallback
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from AI.models.resnet_model import create_dual_resnet_model
+from AI.models.transformer_model import build_model
 from train_loop import create_dataset, count_tfrecord_samples
 from AI.config import TRAINING_DATA_DIR, CURRENT_GENERATION_DATA_SUBDIR, BATCH_SIZE, EPOCHS
 
 def objective(trial):
-    learning_rate = trial.suggest_float('learning_rate', 1e-6, 1e-4, log=True)
+    learning_rate = trial.suggest_float('learning_rate', 1e-6, 2e-4, log=True)
     label_smoothing = trial.suggest_float('label_smoothing', 0.0, 0.1)
-    value_loss_weight = trial.suggest_float('value_loss_weight', 0.5, 1.1)
+    value_loss_weight = 1.0
 
     tfrecord_dir = os.path.join(TRAINING_DATA_DIR, CURRENT_GENERATION_DATA_SUBDIR, 'tfrecords')
     train_tfrecord_dir = os.path.join(tfrecord_dir, 'train')
@@ -30,20 +30,20 @@ def objective(trial):
 
     total_train_samples = getattr(objective, 'total_train_samples', None)
     if total_train_samples is None:
-        objective.total_train_samples = count_tfrecord_samples(train_tfrecord_files) * 8
+        objective.total_train_samples = count_tfrecord_samples(train_tfrecord_files)
         total_train_samples = objective.total_train_samples
 
     total_val_samples = getattr(objective, 'total_val_samples', None)
     if total_val_samples is None:
-        objective.total_val_samples = count_tfrecord_samples(val_tfrecord_files) * 8
+        objective.total_val_samples = count_tfrecord_samples(val_tfrecord_files)
         total_val_samples = objective.total_val_samples
     
     train_dataset = create_dataset(train_tfrecord_files, BATCH_SIZE, is_training=True, total_samples=total_train_samples)
     val_dataset = create_dataset(val_tfrecord_files, BATCH_SIZE, is_training=False)
 
-    model = create_dual_resnet_model()
+    model = build_model()
     
-    optimizer = tf.keras.optimizers.AdamW(learning_rate=learning_rate)
+    optimizer = tf.keras.optimizers.AdamW(learning_rate=learning_rate, clipnorm=1.0, weight_decay=0.05)
 
     model.compile(
         optimizer=optimizer,
@@ -73,12 +73,16 @@ def objective(trial):
         verbose=1
     )
 
-    val_loss = min(history.history['val_loss'])
-    if math.isnan(val_loss):
+    val_mae = min(history.history['val_value_mae'])
+    val_acc = max(history.history['val_policy_1_accu'])
+    
+    composite_score = val_mae - val_acc
+    
+    if math.isnan(composite_score):
         return float('inf')
         
-    return val_loss
+    return composite_score
 
 if __name__ == "__main__":
-    study = optuna.create_study(direction='minimize', study_name='hyperparam_tuning', storage='sqlite:///db.sqlite3', load_if_exists=True)
-    study.optimize(objective, n_trials=5)
+    study = optuna.create_study(direction='minimize', study_name='hyperparam_tuning_v2', storage='sqlite:///db.sqlite3', load_if_exists=True)
+    study.optimize(objective, n_trials=10)
