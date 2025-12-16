@@ -8,7 +8,7 @@ import random
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
 from AI.cpp.reversi_mcts_cpp import MCTS as MCTS_CPP
-from AI.models.transformer_model import TokenAndPositionEmbedding, TransformerBlock
+from AI.models.transformer import TokenAndPositionEmbedding, TransformerBlock
 from AI.config import (
     NUM_GAMES_COMPARE,
     COMPARE_SIMS_N,

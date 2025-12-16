@@ -1,0 +1,37 @@
+default_model: heavy
+
+heavy:
+  embed_dim: 256
+  block: 8
+  head: 8
+  model_save_path: "models/TF/4G.h5"
+  batch_size: 256
+  learning_rate: 6.018790701331087e-05
+  label_smoothing: 0.04165291567423903
+
+nano:
+  embed_dim: 32
+  block: 3
+  head: 4
+  model_save_path: "models/TF/Nano-25K.h5"
+  batch_size: 512
+  learning_rate: 0.0008043670841766147
+  label_smoothing: 0.000567815581294269
+
+heavy-moe:
+  embed_dim: 256
+  block: 8
+  head: 8
+  model_save_path: "models/TF/MoE-1.h5"
+  batch_size: 256
+  learning_rate: 6.018790701331087e-05
+  label_smoothing: 0.04165291567423903
+  
+nano-moe:
+  embed_dim: 28
+  block: 1
+  head: 4
+  model_save_path: "models/TF/Nano-25K-DyMoE.h5"
+  batch_size: 512
+  learning_rate: 0.0008043670841766147
+  label_smoothing: 0.000567815581294269

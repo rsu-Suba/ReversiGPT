@@ -51,33 +51,64 @@ def process_and_write_file(args):
     try:
         with tf.io.TFRecordWriter(output_path) as writer:
             with open(msgpack_path, 'rb') as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(0)
+                if size == 0:
+                    print(f"[WARN] Empty msgpack file: {msgpack_path}")
+                    return 0
+
                 unpacker = msgpack.Unpacker(f, raw=False, use_list=True)
-                for game_history in unpacker:
-                    if not game_history: continue
+                loaded_games = 0
+                
+                for unpacked_item in unpacker:
+                    if isinstance(unpacked_item, list) and len(unpacked_item) > 0 and isinstance(unpacked_item[0], list):
+                        games_batch = unpacked_item
+                    else:
+                        games_batch = [unpacked_item]
 
-                    for record in game_history:
-                        board_np = np.array(record['board'], dtype=np.int8)
-                        player = record['player']
-                        policy_np = np.array(record['policy'], dtype=np.float32)
-                        value = record['value']
+                    for game_history in games_batch:
+                        loaded_games += 1
+                        if not game_history: continue
 
-                        board_tf = tf.convert_to_tensor(board_np, dtype=tf.int8)
-                        player_tf = tf.convert_to_tensor(player, dtype=tf.int32)
-                        policy_tf = tf.convert_to_tensor(policy_np, dtype=tf.float32)
-                        value_tf = tf.convert_to_tensor(value, dtype=tf.float32)
+                        for i, record in enumerate(game_history):
+                            try:
+                                board_np = np.array(record['board'], dtype=np.int8)
+                                player = record['player']
+                                policy_np = np.array(record['policy'], dtype=np.float32)
+                                value = record['value']
+                            except TypeError:
+                                print(f"[ERROR] Malformed record in {os.path.basename(msgpack_path)}. Expected dict, got {type(record)}")
+                                continue
 
-                        input_planes = board_to_input_planes_tf(board_tf, tf.cast(player_tf, tf.int8))
+                            board_tf = tf.convert_to_tensor(board_np, dtype=tf.int8)
+                            player_tf = tf.convert_to_tensor(player, dtype=tf.int32)
+                            policy_tf = tf.convert_to_tensor(policy_np, dtype=tf.float32)
+                            value_tf = tf.convert_to_tensor(value, dtype=tf.float32)
 
-                        if np.any(tf.math.is_nan(input_planes)) or np.any(tf.math.is_inf(input_planes)): continue
-                        if np.any(tf.math.is_nan(policy_tf)) or np.any(tf.math.is_inf(policy_tf)): continue
-                        if tf.math.is_nan(value_tf) or tf.math.is_inf(value_tf): continue
+                            input_planes = board_to_input_planes_tf(board_tf, tf.cast(player_tf, tf.int8))
 
-                        serialized_sample = serialize_sample(input_planes, policy_tf, value_tf)
-                        writer.write(serialized_sample)
-                        sample_count += 1
+                            if np.any(np.isnan(input_planes)) or np.any(np.isinf(input_planes)):
+                                print(f"[SKIP] NaN/Inf in input_planes. File: {os.path.basename(msgpack_path)}, Game: {loaded_games}, Step: {i}")
+                                continue
+                            if np.any(np.isnan(policy_tf)) or np.any(np.isinf(policy_tf)):
+                                print(f"[SKIP] NaN/Inf in policy. File: {os.path.basename(msgpack_path)}, Game: {loaded_games}, Step: {i}")
+                                continue
+                            if np.isnan(value_tf) or np.isinf(value_tf):
+                                print(f"[SKIP] NaN/Inf in value. File: {os.path.basename(msgpack_path)}, Game: {loaded_games}, Step: {i}")
+                                continue
+
+                            serialized_sample = serialize_sample(input_planes, policy_tf, value_tf)
+                            writer.write(serialized_sample)
+                            sample_count += 1
+                
+                if loaded_games == 0:
+                    print(f"[WARN] No games found in {msgpack_path}")
 
     except Exception as e:
         print(f"File error {os.path.basename(msgpack_path)}: {e}")
+        import traceback
+        traceback.print_exc()
         return 0
 
     return sample_count

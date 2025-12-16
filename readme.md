@@ -17,3 +17,21 @@
 
 -  reversi_bitboard_cpp.cpython-311-x86_64-linux-gnu.so : Compiled AI engine (C++)
 -  ./cpp_reversi : AI engine (C++)
+
+### Model Architecture
+#### Iterative Dynamic Routing MoE Transformer
+A specialized Transformer architecture designed for Othello, featuring dynamic computation paths.
+
+- **Backbone**: GPT-like Decoder-only Transformer
+- **Input Embedding**: 
+  - Spatial (Row/Col) + Temporal (Move count) Embeddings
+- **Dynamic Blocks**: 
+  - Iterative Dynamic Routing (Recurrent processing within blocks)
+  - Mixture of Experts (Selectable MHA & FFN modules)
+  - Pre-LN with Residual connections
+- **Dual-Head Output**:
+  - **Policy Head**: Predicts the best move (Softmax)
+  - **Value Head**: Evaluates board position (Tanh, Flattened feature map)
+- **Source**: [`dynamic_MoE.py`](./AI/models/dynamic_MoE.py)
+
+> Model hyperparameters (layers, heads, dimensions) can be configured in `model.yaml`.

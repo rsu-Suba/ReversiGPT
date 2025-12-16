@@ -1,132 +1,303 @@
-
 import os
 import sys
 import numpy as np
-import tensorflow as tf
 import matplotlib.pyplot as plt
-import seaborn as sns
-
-# Add project root to Python path
+import matplotlib.patches as patches
+import tensorflow as tf
+import msgpack
+import glob
+import random
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
 
-from Database.transformerModel import PositionalEncoding
-from reversi_bitboard_cpp import ReversiBitboard
+from AI.models.transformer import build_model
+from AI.config import TRANSFORMER_MODEL_PATH, TRAINING_DATA_DIR
 
-MODEL_PATH = './Database/models/Transformer/1G_trained.h5'
-# You can change this to visualize different layers (e.g., 'multi_head_attention', 'multi_head_attention_1', etc.)
-# Check model.summary() for the exact names.
-TARGET_ATTENTION_LAYER_NAME = 'multi_head_attention_2' # Assuming the last layer
-HEAD_TO_VISUALIZE = 3 # Visualize the first attention head (0 to num_heads-1)
+MODEL_WEIGHTS_PATH = "./models/TF/1G.h5"
+DATA_DIR = os.path.join(TRAINING_DATA_DIR, "1G")
 
-def board_to_input_planes(board_1d, current_player):
-    """Converts a 1D board numpy array to the model's input format."""
-    player_plane = np.zeros((8, 8), dtype=np.float32)
-    opponent_plane = np.zeros((8, 8), dtype=np.float32)
-    board_2d = board_1d.reshape((8, 8))
+QUERY_INDEX = 0
+TARGET_BLOCK_INDEX = 3
+
+def get_legal_moves(board_2d, current_player):
+    bb = ReversiBitboard()
     
-    player_plane[board_2d == current_player] = 1.0
-    opponent_plane[board_2d == 3 - current_player] = 1.0
+    black_mask = 0
+    white_mask = 0
     
-    return np.stack([player_plane, opponent_plane], axis=-1)
-
-def plot_attention_heatmap(board_1d, attention_scores, from_square_index, title):
-    """
-    Displays the board state and an attention heatmap for a specific square.
-    - board_1d: 1D numpy array (64,) representing the board.
-    - attention_scores: Numpy array (64, 64) of attention scores for a specific head.
-    - from_square_index: The square (0-63) from which attention is being visualized.
-    """
-    board_2d = board_1d.reshape(8, 8)
-    attention_for_square = attention_scores[from_square_index, :].reshape(8, 8)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    for r in range(8):
+        for c in range(8):
+            idx = r * 8 + c
+            if board_2d[r, c] == 1:
+                black_mask |= (1 << idx)
+            elif board_2d[r, c] == 2:
+                white_mask |= (1 << idx)
+                
+    bb.black_board = black_mask
+    bb.white_board = white_mask
+    bb.current_player = current_player
     
-    # --- 1. Board State ---
-    board_repr = np.full((8, 8), ' ', dtype=str)
-    board_repr[board_2d == 1] = '●' # Black
-    board_repr[board_2d == 2] = '○' # White
-    
-    sns.heatmap(np.zeros((8,8)), annot=board_repr, fmt='', cbar=False, cmap=['#006400'], 
-                linewidths=0.5, linecolor='black', ax=ax1, square=True)
-    ax1.set_title("Current Board State")
+    return bb.get_legal_moves()
 
-    # Highlight the source square
-    row, col = from_square_index // 8, from_square_index % 8
-    ax1.add_patch(plt.Rectangle((col, row), 1, 1, fill=False, edgecolor='yellow', lw=3))
+def index_to_coord(index):
+    if index < 0 or index >= 64: return "PASS"
+    row = index // 8
+    col = index % 8
+    return f"{chr(ord('A') + col)}{row + 1}"
 
-    # --- 2. Attention Heatmap ---
-    sns.heatmap(attention_for_square, annot=True, fmt=".2f", cmap="viridis", 
-                ax=ax2, square=True)
-    ax2.set_title(title)
+def load_random_sample(data_dir):
+    files = glob.glob(os.path.join(data_dir, "*.msgpack"))
+    if not files:
+        raise FileNotFoundError(f"No .msgpack files found in {data_dir}")
     
+    file_path = random.choice(files)
+    print(f"Loading sample from: {file_path}")
+    
+    with open(file_path, "rb") as f:
+        data = msgpack.unpack(f, raw=False)
+    move_records = []
+    if isinstance(data[0], list):
+        game = random.choice(data)
+        move_records = game
+    else:
+        move_records = data
+
+    if not move_records:
+         raise ValueError("No move records found in file.")
+
+    sample_record = random.choice(move_records)
+    board_state = np.array(sample_record['board'], dtype=np.float32)
+    input_board = np.zeros((1, 8, 8, 2), dtype=np.float32)
+    current_player_color = sample_record['player']
+
+    board_2d = board_state.reshape(8, 8)
+    
+    if current_player_color == 1:
+        input_board[0, :, :, 0] = (board_2d == 1).astype(np.float32)
+        input_board[0, :, :, 1] = (board_2d == 2).astype(np.float32)
+        print("Sample turn: Black's turn")
+    else:
+        input_board[0, :, :, 0] = (board_2d == 2).astype(np.float32)
+        input_board[0, :, :, 1] = (board_2d == 1).astype(np.float32)
+        print("Sample turn: White's turn")
+        
+    return input_board, board_2d, current_player_color
+
+
+def draw_grid_lines(ax):
+    for x in range(9):
+        ax.axvline(x, color='black', linewidth=1)
+        ax.axhline(x, color='black', linewidth=1)
+
+def overlay_stones(ax, board_2d, alpha=1.0):
+    for y in range(8):
+        for x in range(8):
+            stone = board_2d[y, x]
+            if stone == 1:
+                circle = patches.Circle((x + 0.5, y + 0.5), 0.4, facecolor='black', edgecolor='black', alpha=alpha)
+                ax.add_patch(circle)
+            elif stone == 2:
+                circle = patches.Circle((x + 0.5, y + 0.5), 0.4, facecolor='white', edgecolor='black', alpha=alpha)
+                ax.add_patch(circle)
+
+def draw_othello_board(ax, board_2d):
+    ax.set_facecolor('green')
+    draw_grid_lines(ax)
+    overlay_stones(ax, board_2d, alpha=1.0)
+
+def setup_board_axis(ax, invert=False):
+    ax.set_aspect('equal')
+    ax.set_xticks(np.arange(8) + 0.5)
+    ax.set_yticks(np.arange(8) + 0.5)
+    ax.set_xticklabels(['A','B','C','D','E','F','G','H'])
+    ax.set_yticklabels(['1','2','3','4','5','6','7','8'])
+    ax.tick_params(axis='both', which='both', length=0)
+    if invert:
+        ax.invert_yaxis()
+
+def plot_integrated_attention(input_board_2d, attention_heads_map, query_idx, block_idx, policy_prob=None):
+    num_heads = attention_heads_map.shape[0]
+    
+    fig = plt.figure(figsize=(14, 6))
+    
+    coord = index_to_coord(query_idx)
+    title_text = f"Best Move: {coord}"
+    if policy_prob is not None:
+        title_text += f" (Prob: {policy_prob:.4f})"
+    
+    ax_actual = fig.add_subplot(1, 2, 1)
+    ax_actual.set_title("Actual Board")
+    draw_othello_board(ax_actual, input_board_2d)
+    
+    qx, qy = query_idx % 8, query_idx // 8
+    rect = patches.Rectangle((qx, qy), 1, 1, linewidth=3, edgecolor='red', facecolor='none')
+    ax_actual.add_patch(rect)
+    
+    setup_board_axis(ax_actual, invert=True)
+
+    ax_integ = fig.add_subplot(1, 2, 2)
+    ax_integ.set_title(f"Integrated Attention (Top 30% per Head)\n{title_text}")
+    
+    draw_othello_board(ax_integ, input_board_2d)
+    
+    rect2 = patches.Rectangle((qx, qy), 1, 1, linewidth=3, edgecolor='red', facecolor='none', zorder=10)
+    ax_integ.add_patch(rect2)
+    
+    cmap = plt.get_cmap('tab10')
+    head_colors = [cmap(i) for i in range(num_heads)]
+    
+    overlay_rgb = np.zeros((8, 8, 3), dtype=np.float32)
+    overlay_alpha = np.zeros((8, 8), dtype=np.float32)
+    
+    for h in range(num_heads):
+        att_map = attention_heads_map[h, query_idx, :].reshape(8, 8)
+        threshold = np.percentile(att_map, 70)
+        mask = att_map >= threshold
+        color = np.array(head_colors[h][:3])
+        
+        for r in range(8):
+            for c in range(8):
+                if mask[r, c]:
+                    weight = 0.5
+                    
+                    overlay_rgb[r, c] += color * weight
+                    overlay_alpha[r, c] += weight
+
+    max_val = np.max(overlay_rgb)
+    if max_val > 1.0:
+        overlay_rgb /= max_val
+        
+    max_alpha = np.max(overlay_alpha)
+    if max_alpha > 0:
+        overlay_alpha = (overlay_alpha / max_alpha) * 0.7
+    
+    final_overlay = np.dstack((overlay_rgb, overlay_alpha))
+    
+    ax_integ.imshow(final_overlay, extent=[0, 8, 8, 0], origin='upper')
+    
+    setup_board_axis(ax_integ)
+    
+    legend_patches = [patches.Patch(color=head_colors[i], label=f'Head {i+1}') for i in range(num_heads)]
+    ax_integ.legend(handles=legend_patches, loc='upper center', bbox_to_anchor=(0.5, -0.05), ncol=4, fontsize='small')
+
     plt.tight_layout()
+    print(f"\nVisualizing Integrated Attention for: {coord}")
     plt.show()
 
-def main():
-    print(f"--- Loading Transformer Model from {MODEL_PATH} ---")
+def setup_board_axis(ax, invert=False):
+    ax.set_aspect('equal')
+    ax.set_xticks(np.arange(8) + 0.5)
+    ax.set_yticks(np.arange(8) + 0.5)
+    ax.set_xticklabels(['A','B','C','D','E','F','G','H'])
+    ax.set_yticklabels(['1','2','3','4','5','6','7','8'])
+    ax.tick_params(axis='both', which='both', length=0)
+    if invert:
+        ax.invert_yaxis()
+
+def draw_othello_board(ax, board_2d):
+    ax.set_facecolor('green')
+    draw_grid_lines(ax)
+    overlay_stones(ax, board_2d, alpha=1.0)
+
+if __name__ == "__main__":
+    model = build_model(visualize_mode=True) 
     try:
-        with tf.keras.utils.custom_object_scope({'PositionalEncoding': PositionalEncoding}):
-            model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+        print(f"Loading weights from {MODEL_WEIGHTS_PATH}...")
+        model.load_weights(MODEL_WEIGHTS_PATH, by_name=True, skip_mismatch=True)
+        print("Weights loaded successfully.")
     except Exception as e:
-        print(f"Error loading model: {e}")
-        return
+        print(f"Error loading weights: {e}")
+        print("Ensure the model architecture parameters define in build_model match the saved weights.")
+        sys.exit(1)
 
-    print("\n--- Model Summary ---")
-    model.summary()
-
-    # --- Create a new model to output attention scores ---
     try:
-        target_layer = model.get_layer(TARGET_ATTENTION_LAYER_NAME)
-    except ValueError:
-        print(f"\nError: Layer '{TARGET_ATTENTION_LAYER_NAME}' not found in the model.")
-        print("Please check the layer names in the summary above and update TARGET_ATTENTION_LAYER_NAME.")
-        return
+        input_board_batch, board_2d_display, current_player = load_random_sample(DATA_DIR)
+    except Exception as e:
+        print(f"Data loading error: {e}")
+        sys.exit(1)
 
-    # The .input property of a layer gives its symbolic input tensor(s).
-    # For MultiHeadAttention, this is a list [query, key, value...].
-    # In our self-attention case, query and key are the same tensor from the previous layer.
-    if not isinstance(target_layer.input, list) or len(target_layer.input) < 1:
-        print(f"Error: Could not determine input tensor for layer {TARGET_ATTENTION_LAYER_NAME}")
-        return
-    input_tensor = target_layer.input[0]
+    print("Running inference...")
+    outputs = model.predict(input_board_batch)
+    
+    policy_logits = outputs[0][0]
+    
+    legal_moves = get_legal_moves(board_2d_display, current_player)
+    print(f"Legal moves: {[index_to_coord(m) for m in legal_moves]}")
+    
+    if not legal_moves:
+        print("No legal moves (Pass). Skipping visualization.")
+        sys.exit(0)
 
-    # Call the layer directly on its input tensor, forcing it to return scores.
-    _, attention_scores = target_layer(input_tensor, input_tensor, return_attention_scores=True)
+    max_prob = -1.0
+    best_move = -1
+    
+    for move in legal_moves:
+        prob = policy_logits[move]
+        if prob > max_prob:
+            max_prob = prob
+            best_move = move
+            
+    print(f"Best move selected by Policy: {index_to_coord(best_move)} with prob {max_prob:.4f}")
 
-    # Create a new model that maps the original model's input to these attention scores.
-    attention_model = tf.keras.Model(inputs=model.input, outputs=attention_scores)
-    print(f"\nSuccessfully created model to extract attention from '{TARGET_ATTENTION_LAYER_NAME}'.")
+    if TARGET_BLOCK_INDEX == -1:
+        attention_map_batch = outputs[-1]
+        print("Visualizing the last Transformer block.")
+    else:
+        attention_map_batch = outputs[2 + TARGET_BLOCK_INDEX]
+        print(f"Visualizing Transformer block index: {TARGET_BLOCK_INDEX}")
 
-    # --- Prepare a sample board ---
-    game = ReversiBitboard()
-    # You can apply some moves to get to an interesting position
-    # game.apply_move(19) 
-    # game.apply_move(18)
-    
-    board_np = game.board_to_numpy()
-    current_player = game.current_player
-    
-    model_input = np.expand_dims(board_to_input_planes(board_np, current_player), axis=0)
+    attention_map_single = attention_map_batch[0]
 
-    # --- Get and Visualize Attention ---
-    print("\n--- Calculating Attention Scores ---")
-    scores = attention_model.predict(model_input)
-    
-    # scores shape is (batch, num_heads, from_seq, to_seq) -> (1, 4, 64, 64)
-    print(f"Output scores shape: {scores.shape}")
-    
-    # Select a square to visualize attention FROM
-    # (e.g., a corner, an edge, a player's piece)
-    from_square = 27 # An example square (D4)
-    
-    attention_head_scores = scores[0, HEAD_TO_VISUALIZE, :, :]
-    
-    plot_attention_heatmap(
-        board_np, 
-        attention_head_scores, 
-        from_square,
-        title=f"Attention from Square {from_square} (Head {HEAD_TO_VISUALIZE})"
-    )
+    plot_integrated_attention(board_2d_display, attention_map_single, best_move, TARGET_BLOCK_INDEX, policy_prob=max_prob)
 
-if __name__ == '__main__':
-    main()
+
+if __name__ == "__main__":
+    model = build_model(visualize_mode=True) 
+
+    try:
+        print(f"Loading weights from {MODEL_WEIGHTS_PATH}...")
+        model.load_weights(MODEL_WEIGHTS_PATH, by_name=True, skip_mismatch=True)
+        print("Weights loaded successfully.")
+    except Exception as e:
+        print(f"Error loading weights: {e}")
+        sys.exit(1)
+
+    try:
+        input_board_batch, board_2d_display, current_player = load_random_sample(DATA_DIR)
+    except Exception as e:
+        print(f"Data loading error: {e}")
+        sys.exit(1)
+
+    print("Running inference...")
+    outputs = model.predict(input_board_batch)
+    
+    policy_logits = outputs[0][0]
+    
+    legal_moves = get_legal_moves(board_2d_display, current_player)
+    print(f"Legal moves: {[index_to_coord(m) for m in legal_moves]}")
+    
+    if not legal_moves:
+        print("No legal moves (Pass). Skipping visualization.")
+        sys.exit(0)
+
+    max_prob = -1.0
+    best_move = -1
+    
+    for move in legal_moves:
+        prob = policy_logits[move]
+        if prob > max_prob:
+            max_prob = prob
+            best_move = move
+            
+    print(f"Best move selected by Policy: {index_to_coord(best_move)} with prob {max_prob:.4f}")
+    
+    if TARGET_BLOCK_INDEX == -1:
+        attention_map_batch = outputs[-1]
+        print("Visualizing the last Transformer block.")
+    else:
+        attention_map_batch = outputs[2 + TARGET_BLOCK_INDEX]
+        print(f"Visualizing Transformer block index: {TARGET_BLOCK_INDEX}")
+
+    attention_map_single = attention_map_batch[0] 
+
+    plot_integrated_attention(board_2d_display, attention_map_single, best_move, TARGET_BLOCK_INDEX, policy_prob=max_prob)

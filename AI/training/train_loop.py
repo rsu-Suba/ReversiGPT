@@ -1,4 +1,3 @@
-
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -7,18 +6,32 @@ import glob
 import json
 import tensorflow as tf
 from tensorflow.keras.callbacks import Callback, EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
-from tensorflow.keras.optimizers.schedules import CosineDecay
 from tensorflow.keras import mixed_precision
 from tqdm import tqdm
-from AI.models.transformer_model import TokenAndPositionEmbedding, TransformerBlock, build_model
+from AI.config_loader import load_config
 from AI.config import (
     TRAINING_DATA_DIR,
-    TRAINED_MODEL_SAVE_PATH,
     CURRENT_GENERATION_DATA_SUBDIR,
-    EPOCHS,
-    BATCH_SIZE,
-    learning_rate
+    EPOCHS
 )
+
+config = load_config()
+print(f"Loaded config for model: {config['model_name']}")
+
+TRAINED_MODEL_SAVE_PATH = config.get('model_save_path', './models/TF/model.h5')
+BATCH_SIZE = config.get('batch_size', 256)
+learning_rate = config.get('learning_rate', 1e-4)
+label_smoothing_value = config.get('label_smoothing', 0.04165291567423903)
+
+IS_MOE = 'moe' in config['model_name'].lower()
+
+if IS_MOE:
+    from AI.models.dynamic_MoE import TokenAndPositionEmbedding, DynamicAssembly, build_model
+    print("Using MoE Architecture")
+else:
+    from AI.models.transformer import TokenAndPositionEmbedding, TransformerBlock, build_model
+    print("Using Standard Transformer Architecture")
+
 mixed_precision.set_global_policy('mixed_float16')
 
 @tf.keras.utils.register_keras_serializable()
@@ -29,25 +42,9 @@ class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
         self.decay_steps = decay_steps
         self.warmup_steps = warmup_steps
         self.alpha = alpha
-        self.cosine_decay = CosineDecay(
-            initial_learning_rate=initial_learning_rate,
-            decay_steps=decay_steps - warmup_steps,
-            alpha=alpha
-        )
 
     def __call__(self, step):
-        step = tf.cast(step, tf.float32)
-        warmup_percent_done = step / self.warmup_steps
-        warmup_learning_rate = self.initial_learning_rate * warmup_percent_done
-
-        is_warmup = step < self.warmup_steps
-
-        learning_rate = tf.cond(
-            is_warmup,
-            lambda: warmup_learning_rate,
-            lambda: self.cosine_decay(step - self.warmup_steps)
-        )
-        return learning_rate
+        return self.initial_learning_rate
 
     def get_config(self):
         return {
@@ -158,20 +155,6 @@ if __name__ == "__main__":
         total_val_samples = count_tfrecord_samples(val_tfrecord_files)
         val_dataset = create_dataset(val_tfrecord_files, BATCH_SIZE, is_training=False)
 
-    initial_learning_rate = learning_rate
-    steps_per_epoch = math.ceil(total_train_samples / BATCH_SIZE)
-    TARGET_DECAY_EPOCHS = 80
-    decay_steps = steps_per_epoch * TARGET_DECAY_EPOCHS
-    warmup_epochs = 5
-    warmup_steps = warmup_epochs * steps_per_epoch
-
-    lr_schedule = WarmupCosineDecay(
-        initial_learning_rate=initial_learning_rate,
-        decay_steps=decay_steps,
-        warmup_steps=warmup_steps,
-        alpha=0.000005
-    )
-
     model = None
     if os.path.exists(TRAINED_MODEL_SAVE_PATH):
         print(f"Resuming training from model: {TRAINED_MODEL_SAVE_PATH}")
@@ -181,20 +164,29 @@ if __name__ == "__main__":
             'WarmupCosineDecay': WarmupCosineDecay
         }
         model = tf.keras.models.load_model(
-            TRAINED_MODEL_SAVE_PATH, custom_objects=custom_objects
+            TRAINED_MODEL_SAVE_PATH, 
+            custom_objects=custom_objects,
+            compile=False
         )
 
     if model is None:
         print("No existing model found or failed to load. Creating a new model.")
-        model = build_model()
+        model = build_model(
+            d_model=config['embed_dim'],
+            num_blocks=config['block'],
+            num_heads=config['head']
+        )
+        model.summary()
 
+    initial_lr = learning_rate
+    
     model.compile(
-        optimizer=tf.keras.optimizers.AdamW(learning_rate=lr_schedule, clipnorm=1.0, weight_decay=0.05),
+        optimizer=tf.keras.optimizers.AdamW(learning_rate=initial_lr, clipnorm=1.0, weight_decay=0.05),
         loss={
-            'policy': tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.028968626957636873),
+            'policy': tf.keras.losses.CategoricalCrossentropy(label_smoothing=label_smoothing_value),
             'value': 'mean_squared_error'
         },
-        loss_weights={'policy': 1.0, 'value': 0.5544360525425724},
+        loss_weights={'policy': 1.0, 'value': 0.8},
         metrics={
             'policy': [tf.keras.metrics.TopKCategoricalAccuracy(k=1, name='1'), tf.keras.metrics.TopKCategoricalAccuracy(k=3, name='3')],
             'value': 'mae'
@@ -203,9 +195,17 @@ if __name__ == "__main__":
 
     early_stopping = EarlyStopping(
         monitor='val_loss',
-        min_delta=1e-5,
-        patience=5,
+        min_delta=1e-4,
+        patience=20,
         restore_best_weights=True,
+        verbose=1
+    )
+    
+    reduce_lr_on_plateau = ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=7,
+        min_lr=1e-7,
         verbose=1
     )
 
@@ -226,6 +226,7 @@ if __name__ == "__main__":
         validation_steps=math.ceil(total_val_samples / BATCH_SIZE) if val_dataset else None,
         callbacks=[
             early_stopping,
+            reduce_lr_on_plateau,
             model_checkpoint_callback
         ]
     )

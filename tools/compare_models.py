@@ -7,7 +7,9 @@ import sys
 import random
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
-from AI.models.transformer_model import TokenAndPositionEmbedding, TransformerBlock
+from AI.models.transformer import TokenAndPositionEmbedding, TransformerBlock, build_model
+from AI.models.static_MoE import TokenAndPositionEmbedding, TransformerBlock, build_model, ExpertSearch, ExpertThink
+from AI.models.dynamic_MoE import TokenAndPositionEmbedding, MHA, FFN, DynamicAssembly, build_model
 from AI.training.train_loop import WarmupCosineDecay
 from AI.config import (
     NUM_GAMES_COMPARE,
@@ -152,7 +154,10 @@ class MCTS:
 
 class MCTS_AIPlayer:
     def __init__(self, model_path, name, sims_per_move):
-        with tf.keras.utils.custom_object_scope({'TokenAndPositionEmbedding': TokenAndPositionEmbedding, 'TransformerBlock': TransformerBlock, 'WarmupCosineDecay': WarmupCosineDecay}):
+        with tf.keras.utils.custom_object_scope({'TokenAndPositionEmbedding': TokenAndPositionEmbedding,
+                                                 'TransformerBlock': TransformerBlock,
+                                                 'WarmupCosineDecay': WarmupCosineDecay, 
+                                                 'DynamicAssembly': DynamicAssembly}):
             self.model = tf.keras.models.load_model(model_path)
         self.mcts = MCTS(self.model)
         self.name = name

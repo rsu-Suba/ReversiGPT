@@ -10,14 +10,13 @@ from optuna.integration import TFKerasPruningCallback
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from AI.models.transformer_model import build_model
+from AI.models.transformer import build_model
 from train_loop import create_dataset, count_tfrecord_samples
 from AI.config import TRAINING_DATA_DIR, CURRENT_GENERATION_DATA_SUBDIR, BATCH_SIZE, EPOCHS
 
 def objective(trial):
     learning_rate = trial.suggest_float('learning_rate', 1e-6, 2e-4, log=True)
     label_smoothing = trial.suggest_float('label_smoothing', 0.0, 0.1)
-    value_loss_weight = 1.0
 
     tfrecord_dir = os.path.join(TRAINING_DATA_DIR, CURRENT_GENERATION_DATA_SUBDIR, 'tfrecords')
     train_tfrecord_dir = os.path.join(tfrecord_dir, 'train')
@@ -51,7 +50,7 @@ def objective(trial):
             'policy': tf.keras.losses.CategoricalCrossentropy(label_smoothing=label_smoothing),
             'value': 'mean_squared_error'
         },
-        loss_weights={'policy': 1.0, 'value': value_loss_weight},
+        loss_weights={'policy': 1.0, 'value': 0.8},
         metrics={
             'policy': [tf.keras.metrics.TopKCategoricalAccuracy(k=1, name='1_accu'), tf.keras.metrics.TopKCategoricalAccuracy(k=3, name='3_accu')],
             'value': 'mae'
