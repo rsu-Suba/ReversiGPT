@@ -12,7 +12,6 @@ data/
 # Logs
 logs/
 *.prof
-*.json
 
 # OS
 .DS_Store
