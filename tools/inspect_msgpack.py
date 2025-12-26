@@ -12,10 +12,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from AI.config import TRAINING_DATA_DIR, INSPECT_GENERATION_SUBDIR
 
 def inspect_msgpack_structure(file_path):
-    """
-    Inspects the structure of a single msgpack file.
-    Assumes file contains one packed object which is a list of either games or moves.
-    """
     try:
         with open(file_path, 'rb') as f:
             data = msgpack.unpack(f, raw=False, use_list=True)
@@ -44,7 +40,6 @@ def inspect_msgpack_structure(file_path):
         print(f"Error reading or inspecting {file_path}: {e}")
 
 def plot_heatmap(data, title, ax):
-    """Helper function to plot a single heatmap."""
     if data is None or np.all(data == 0):
         ax.text(0.5, 0.5, 'No Data', horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
         ax.set_title(title)
@@ -63,11 +58,6 @@ def plot_heatmap(data, title, ax):
     ax.set_ylabel('')
 
 def analyze_msgpack_game_data(msgpack_dir):
-    """
-    Analyzes msgpack files containing game history records
-    to create aggregated policy-value heatmaps for different phases of the game.
-    Can handle both structured (list of games) and flat (list of moves) formats.
-    """
     if not os.path.isdir(msgpack_dir):
         print(f"Error: Directory not found: {msgpack_dir}")
         return

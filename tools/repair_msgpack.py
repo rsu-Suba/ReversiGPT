@@ -4,10 +4,6 @@ import glob
 import msgpack
 
 def repair_msgpack_file(file_path):
-    """
-    Repairs a msgpack file that contains both extended (flat moves) and
-    appended (list of games) data by keeping only the flat move data.
-    """
     if not os.path.exists(file_path):
         print(f"Error: File not found -> {file_path}")
         return

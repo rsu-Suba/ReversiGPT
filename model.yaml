@@ -1,6 +1,21 @@
 default_model: heavy
 
+model-test:
+  arch: dynamic
+  embed_dim: 64
+  block: 4
+  head: 4
+  model_save_path: "models/TF/model_test.h5"
+  batch_size: 1024
+  learning_rate: 3.018790701331087e-05
+  label_smoothing: 0.04165291567423903
+  num_mha: 4
+  num_ffn: 4
+  steps: 1
+  dropout_rate: 0.1
+
 heavy:
+  arch: transformer
   embed_dim: 256
   block: 8
   head: 8
@@ -10,6 +25,7 @@ heavy:
   label_smoothing: 0.04165291567423903
 
 nano:
+  arch: transformer
   embed_dim: 32
   block: 3
   head: 4
@@ -19,19 +35,39 @@ nano:
   label_smoothing: 0.000567815581294269
 
 heavy-moe:
-  embed_dim: 256
-  block: 8
-  head: 8
-  model_save_path: "models/TF/MoE-1.h5"
-  batch_size: 256
-  learning_rate: 6.018790701331087e-05
-  label_smoothing: 0.04165291567423903
-  
+  arch: dynamic
+  embed_dim: 128
+  block: 4
+  head: 6
+  model_save_path: "models/TF/MoE-1-optuna.h5"
+  batch_size: 650
+  learning_rate: 0.00017551487797828308
+  label_smoothing: 0.06687405683728424
+  num_mha: 2
+  num_ffn: 4
+  steps: 1
+  dropout_rate: 0.2
+
 nano-moe:
+  arch: dynamic
   embed_dim: 28
   block: 1
   head: 4
   model_save_path: "models/TF/Nano-25K-DyMoE.h5"
   batch_size: 512
   learning_rate: 0.0008043670841766147
+  label_smoothing: 0.000567815581294269
+  num_mha: 2
+  num_ffn: 2
+  steps: 3
+  dropout_rate: 0.2
+
+micro:
+  arch: transformer
+  embed_dim: 100
+  block: 6
+  head: 8
+  model_save_path: "models/TF/micro-2.h5"
+  batch_size: 512
+  learning_rate: 0.0006043670841766147
   label_smoothing: 0.000567815581294269

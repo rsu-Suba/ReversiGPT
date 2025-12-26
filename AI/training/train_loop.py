@@ -4,10 +4,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 import math
 import glob
 import json
+import datetime
 import tensorflow as tf
+import numpy as np
 from tensorflow.keras.callbacks import Callback, EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras import mixed_precision
 from tqdm import tqdm
+from AI.models.model_selector import try_load_model, create_model
+from AI.training.scheduler import WarmupCosineDecay
 from AI.config_loader import load_config
 from AI.config import (
     TRAINING_DATA_DIR,
@@ -23,36 +27,7 @@ BATCH_SIZE = config.get('batch_size', 256)
 learning_rate = config.get('learning_rate', 1e-4)
 label_smoothing_value = config.get('label_smoothing', 0.04165291567423903)
 
-IS_MOE = 'moe' in config['model_name'].lower()
-
-if IS_MOE:
-    from AI.models.dynamic_MoE import TokenAndPositionEmbedding, DynamicAssembly, build_model
-    print("Using MoE Architecture")
-else:
-    from AI.models.transformer import TokenAndPositionEmbedding, TransformerBlock, build_model
-    print("Using Standard Transformer Architecture")
-
 mixed_precision.set_global_policy('mixed_float16')
-
-@tf.keras.utils.register_keras_serializable()
-class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, initial_learning_rate, decay_steps, warmup_steps, alpha=0.0):
-        super(WarmupCosineDecay, self).__init__()
-        self.initial_learning_rate = initial_learning_rate
-        self.decay_steps = decay_steps
-        self.warmup_steps = warmup_steps
-        self.alpha = alpha
-
-    def __call__(self, step):
-        return self.initial_learning_rate
-
-    def get_config(self):
-        return {
-            "initial_learning_rate": self.initial_learning_rate,
-            "decay_steps": self.decay_steps,
-            "warmup_steps": self.warmup_steps,
-            "alpha": self.alpha,
-        }
 
 def _parse_function(example_proto):
     feature_description = {
@@ -100,14 +75,14 @@ def create_dataset(tfrecord_files, batch_size, is_training=True, total_samples=N
         dataset = dataset.shuffle(len(tfrecord_files))
 
     dataset = dataset.interleave(
-        lambda x: tf.data.TFRecordDataset(x, num_parallel_reads=tf.data.AUTOTUNE),
+        lambda x: tf.data.TFRecordDataset(x, num_parallel_reads=tf.data.AUTOTUNE).cache(),
         cycle_length=tf.data.AUTOTUNE,
         num_parallel_calls=tf.data.AUTOTUNE,
         deterministic=not is_training
     )
 
     if is_training:
-        buffer_size = min(total_samples, 100000) if total_samples else 50000
+        buffer_size = min(total_samples, 100000) if total_samples else 100000
         dataset = dataset.shuffle(buffer_size=buffer_size)
         dataset = dataset.repeat()
 
@@ -120,7 +95,7 @@ def create_dataset(tfrecord_files, batch_size, is_training=True, total_samples=N
         num_parallel_calls=tf.data.AUTOTUNE
     )
 
-    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
 
     return dataset
 
@@ -128,9 +103,76 @@ def count_tfrecord_samples(file_paths):
     print(f"Counting samples <- {len(file_paths)} files")
     total_count = 0
     for file_path in tqdm(file_paths, desc="Counting samples"):
-        count = sum(1 for _ in tf.data.TFRecordDataset(file_path))
-        total_count += count
-    return total_count
+        try:
+            ds = tf.data.TFRecordDataset(file_path)
+            count = ds.reduce(np.int64(0), lambda x, _: x + 1).numpy()
+            total_count += count
+        except Exception as e:
+            print(f"Warning: Failed to count samples in {file_path}: {e}")
+            
+    return int(total_count)
+
+def get_cached_sample_count(file_paths, cache_dir):
+    cache_file = os.path.join(cache_dir, 'sample_count_cache.json')
+    current_file_count = len(file_paths)
+    
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r') as f:
+                cache_data = json.load(f)
+            
+            if cache_data.get('file_count') == current_file_count:
+                print(f"Using cached sample count from {cache_file} (Samples: {cache_data.get('total_samples')})")
+                return cache_data.get('total_samples')
+        except Exception as e:
+            print(f"Failed to read cache file: {e}")
+            
+    total_samples = count_tfrecord_samples(file_paths)
+    
+    try:
+        with open(cache_file, 'w') as f:
+            json.dump({
+                'file_count': current_file_count,
+                'total_samples': total_samples
+            }, f)
+        print(f"Updated sample count cache at {cache_file}")
+    except Exception as e:
+        print(f"Failed to write cache file: {e}")
+        
+    return total_samples
+
+class ExpertUsageLogger(Callback):
+    def __init__(self, dataset):
+        super().__init__()
+        self.sample_batch = next(iter(dataset.take(1)))
+
+    def on_epoch_end(self, epoch, logs=None):
+        inputs, _ = self.sample_batch
+        _ = self.model(inputs, training=False)
+        
+        print(f"\n--- Epoch {epoch+1} Expert Analysis ---")
+        
+        for layer in self.model.layers:
+            self._check_recursive(layer, epoch)
+
+    def _check_recursive(self, layer, epoch):
+        if hasattr(layer, 'layers'):
+            for sub in layer.layers:
+                self._check_recursive(sub, epoch)
+        
+        if 'dynamic_assembly' in layer.name:
+            if hasattr(layer, 'last_mha_probs'):
+                self._log_usage(layer.last_mha_probs.numpy(), "MHA (Vision)")
+            if hasattr(layer, 'last_probs'):
+                self._log_usage(layer.last_probs.numpy(), "FFN (Knowledge)")
+
+    def _log_usage(self, probs, title):
+        usage = np.mean(probs, axis=0)
+        std = np.std(usage)
+        print(f" [{title} Usage Distribution] StdDev: {std:.4f}")
+        for i, u in enumerate(usage):
+            bar = "█" * int(u * 20)
+            print(f"  Expert {i}: {u:5.1%} {bar}")
 
 if __name__ == "__main__":
     tfrecord_dir = os.path.join(TRAINING_DATA_DIR, CURRENT_GENERATION_DATA_SUBDIR, 'tfrecords')
@@ -146,38 +188,25 @@ if __name__ == "__main__":
 
     print(f"Train TFRecord : {len(train_tfrecord_files)}, Val TFRecord : {len(val_tfrecord_files)}")
 
-    total_train_samples = count_tfrecord_samples(train_tfrecord_files)
+    total_train_samples = get_cached_sample_count(train_tfrecord_files, train_tfrecord_dir)
     train_dataset = create_dataset(train_tfrecord_files, BATCH_SIZE, is_training=True, total_samples=total_train_samples)
 
     val_dataset = None
     total_val_samples = 0
     if val_tfrecord_files:
-        total_val_samples = count_tfrecord_samples(val_tfrecord_files)
+        total_val_samples = get_cached_sample_count(val_tfrecord_files, val_tfrecord_dir)
         val_dataset = create_dataset(val_tfrecord_files, BATCH_SIZE, is_training=False)
 
     model = None
     if os.path.exists(TRAINED_MODEL_SAVE_PATH):
         print(f"Resuming training from model: {TRAINED_MODEL_SAVE_PATH}")
-        custom_objects = {
-            'TokenAndPositionEmbedding': TokenAndPositionEmbedding,
-            'TransformerBlock': TransformerBlock,
-            'WarmupCosineDecay': WarmupCosineDecay
-        }
-        model = tf.keras.models.load_model(
-            TRAINED_MODEL_SAVE_PATH, 
-            custom_objects=custom_objects,
-            compile=False
-        )
+        model = try_load_model(TRAINED_MODEL_SAVE_PATH)
 
     if model is None:
         print("No existing model found or failed to load. Creating a new model.")
-        model = build_model(
-            d_model=config['embed_dim'],
-            num_blocks=config['block'],
-            num_heads=config['head']
-        )
-        model.summary()
+        model = create_model(config)
 
+    model.summary()
     initial_lr = learning_rate
     
     model.compile(
@@ -186,17 +215,18 @@ if __name__ == "__main__":
             'policy': tf.keras.losses.CategoricalCrossentropy(label_smoothing=label_smoothing_value),
             'value': 'mean_squared_error'
         },
-        loss_weights={'policy': 1.0, 'value': 0.8},
+        loss_weights={'policy': 0.8, 'value': 1.0},
         metrics={
             'policy': [tf.keras.metrics.TopKCategoricalAccuracy(k=1, name='1'), tf.keras.metrics.TopKCategoricalAccuracy(k=3, name='3')],
             'value': 'mae'
-        }
+        },
+        jit_compile=True
     )
 
     early_stopping = EarlyStopping(
         monitor='val_loss',
         min_delta=1e-4,
-        patience=20,
+        patience=6,
         restore_best_weights=True,
         verbose=1
     )
@@ -217,6 +247,14 @@ if __name__ == "__main__":
         verbose=1
     )
 
+    # tensorboard_callback = tf.keras.callbacks.TensorBoard(
+    #     log_dir=log_dir,
+    #     histogram_freq=1,
+    #     profile_batch='20, 40' 
+    # )
+
+    expert_logger = ExpertUsageLogger(val_dataset)
+
     print("\n--- Train start ---")
     history = model.fit(
         train_dataset,
@@ -227,7 +265,9 @@ if __name__ == "__main__":
         callbacks=[
             early_stopping,
             reduce_lr_on_plateau,
-            model_checkpoint_callback
+            model_checkpoint_callback,
+            # tensorboard_callback,
+            expert_logger
         ]
     )
 

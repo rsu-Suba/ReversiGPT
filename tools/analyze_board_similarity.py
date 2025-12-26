@@ -28,11 +28,9 @@ def analyze_board_similarity(directory_path):
             
             for record in game_data:
                 total_states += 1
-                # Create a unique representation for the board state
                 board_key = (record['black_board'], record['white_board'], record['player'])
                 unique_boards.add(board_key)
 
-                # Analyze game phase based on total number of pieces
                 black_pieces = bin(record['black_board']).count('1')
                 white_pieces = bin(record['white_board']).count('1')
                 total_pieces = black_pieces + white_pieces

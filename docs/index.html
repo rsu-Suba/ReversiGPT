@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+   <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Reversi AI</title>
+      <link rel="stylesheet" href="style.css" />
+      <link rel="icon" href="favicon.ico">
+   </head>
+   <body>
+      <div id="game-container">
+         <div id="board"></div>
+         <div id="game-info">
+            <p>Turn: <span id="current-player"></span></p>
+            <p>Black: <span id="black-score"></span></p>
+            <p>White: <span id="white-score"></span></p>
+            <div id="game-message" class="message"></div>
+            <button id="reset-button">Reset Game</button>
+         </div>
+      </div>
+      <div id="temp-message" class="temp-message"></div>
+      <p class="dev-text">
+         Model : Transformer-3 (Dec 8 '25)<br />
+         <a href="https://github.com/rsu-Suba/ReversiGPT">Github Repo</a>
+      </p>
+      <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+      <script type="module" src="main.js"></script>
+   </body>
+</html>

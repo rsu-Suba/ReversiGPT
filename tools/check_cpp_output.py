@@ -3,7 +3,6 @@ import sys
 import numpy as np
 import msgpack
 
-# Add parent directory to path to import reversi_bitboard_cpp
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from reversi_bitboard_cpp import process_msgpack_file
@@ -40,13 +39,5 @@ def check_samples(msgpack_path):
         print(f"Error processing {msgpack_path}: {e}")
 
 if __name__ == "__main__":
-    # Example usage:
-    # Replace with the actual path to your msgpack file
-    # You can get this from the tfrecord.py debug output
     msgpack_file_to_check = "./Database/training_data/9G/mcts_tree_60.msgpack" 
     check_samples(msgpack_file_to_check)
-
-    # You can also iterate through multiple files if needed
-    # import glob
-    # for f in glob.glob("./Database/training_data/9G/*.msgpack"):
-    # #     check_samples(f)

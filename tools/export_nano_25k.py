@@ -4,7 +4,7 @@ import numpy as np
 import h5py
 
 def main():
-    model_path = "models/TF/Nano-25K-B3.h5" # Updated path
+    model_path = "models/TF/Nano-25K-B3.h5"
     output_path = "submission/weights.bin"
     
     if not os.path.exists(model_path):
@@ -48,15 +48,12 @@ def main():
                 if reshape_to: val = val.reshape(reshape_to)
                 return val
 
-            # 1. Input Dense
             weights.append(pop_w_pattern('dense/dense/kernel', (2, 32)))
             weights.append(pop_w_pattern('dense/dense/bias', (32,)))
             
-            # 2. Embeddings
             weights.append(pop_w_pattern('row_emb', (8, 32)))
             weights.append(pop_w_pattern('col_emb', (8, 32)))
             
-            # 3. Blocks (3 blocks now!)
             for _ in range(3):
                 # MHA
                 weights.append(pop_w_pattern('query/kernel', (32, 4, 8), (32, 32)))
@@ -76,18 +73,17 @@ def main():
                 weights.append(pop_w_pattern('beta', (32,)))
                 
                 # FFN1
-                weights.append(pop_w_pattern('sequential', (32, 128))) # kernel
-                weights.append(pop_w_pattern('sequential', (128,)))   # bias
+                weights.append(pop_w_pattern('sequential', (32, 128)))
+                weights.append(pop_w_pattern('sequential', (128,)))
                 
                 # FFN2
-                weights.append(pop_w_pattern('sequential', (128, 32))) # kernel
-                weights.append(pop_w_pattern('sequential', (32,)))     # bias
+                weights.append(pop_w_pattern('sequential', (128, 32)))
+                weights.append(pop_w_pattern('sequential', (32,)))
                 
                 # LN2
                 weights.append(pop_w_pattern('gamma', (32,)))
                 weights.append(pop_w_pattern('beta', (32,)))
                 
-            # 4. Heads
             weights.append(pop_w_pattern('policy_logits/kernel', (32, 1)))
             weights.append(pop_w_pattern('policy_logits/bias', (1,)))
             

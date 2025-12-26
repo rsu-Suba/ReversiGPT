@@ -2,7 +2,7 @@ import h5py
 import sys
 
 def main():
-    model_path = "models/TF/Nano-25K.h5"
+    model_path = "models/TF/MoE-1.h5"
     
     with h5py.File(model_path, 'r') as f:
         def visit_func(name, node):

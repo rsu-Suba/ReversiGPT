@@ -107,16 +107,15 @@ def build_model(input_shape=(8, 8, 2), d_model=32, num_blocks=2, num_heads=4):
 
     for _ in range(num_blocks):
         x = DynamicAssembly(d_model, num_heads, num_mha=3, num_ffn=3, steps=8)(x)
-    '''
-    # Policy Head
-    policy_logits = layers.Dense(1, name="policy_logits")(x)
-    policy_logits = layers.Reshape((64,))(policy_logits)
-    policy_head = layers.Activation('softmax', name='policy', dtype='float32')(policy_logits)
 
-    # Value Head
-    value_pooled = layers.GlobalAveragePooling1D()(x)
-    value_head = layers.Dense(1, activation='tanh', name='value', dtype='float32')(value_pooled)
-    '''
+    # # Policy Head
+    # policy_logits = layers.Dense(1, name="policy_logits")(x)
+    # policy_logits = layers.Reshape((64,))(policy_logits)
+    # policy_head = layers.Activation('softmax', name='policy', dtype='float32')(policy_logits)
+
+    # # Value Head
+    # value_pooled = layers.GlobalAveragePooling1D()(x)
+    # value_head = layers.Dense(1, activation='tanh', name='value', dtype='float32')(value_pooled)
 
     # Policy Head
     policy_x = layers.Dense(d_model, activation='relu', name="policy_hidden")(x)

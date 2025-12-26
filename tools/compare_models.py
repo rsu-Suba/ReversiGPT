@@ -1,16 +1,14 @@
 import numpy as np
 import tensorflow as tf
 import os
+import sys
 import math
 import time
-import sys
-import random
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from tensorflow.keras import mixed_precision
+mixed_precision.set_global_policy('mixed_float16')
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
-from AI.models.transformer import TokenAndPositionEmbedding, TransformerBlock, build_model
-from AI.models.static_MoE import TokenAndPositionEmbedding, TransformerBlock, build_model, ExpertSearch, ExpertThink
-from AI.models.dynamic_MoE import TokenAndPositionEmbedding, MHA, FFN, DynamicAssembly, build_model
-from AI.training.train_loop import WarmupCosineDecay
+from AI.models.model_selector import try_load_model
 from AI.config import (
     NUM_GAMES_COMPARE,
     COMPARE_SIMS_N,
@@ -154,11 +152,7 @@ class MCTS:
 
 class MCTS_AIPlayer:
     def __init__(self, model_path, name, sims_per_move):
-        with tf.keras.utils.custom_object_scope({'TokenAndPositionEmbedding': TokenAndPositionEmbedding,
-                                                 'TransformerBlock': TransformerBlock,
-                                                 'WarmupCosineDecay': WarmupCosineDecay, 
-                                                 'DynamicAssembly': DynamicAssembly}):
-            self.model = tf.keras.models.load_model(model_path)
+        self.model = try_load_model(model_path)
         self.mcts = MCTS(self.model)
         self.name = name
         self.sims_per_move = sims_per_move

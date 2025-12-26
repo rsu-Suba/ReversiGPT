@@ -125,10 +125,10 @@ class ExpertThink(layers.Layer):
         return tf.cast(x_f32, x.dtype)
 
 class TransformerBlock(layers.Layer):
-    def __init__(self, d_model, num_heads, **kwargs):
+    def __init__(self, d_model, num_heads, rate, **kwargs):
         super().__init__(**kwargs)
-        self.expert_search = ExpertSearch(d_model, num_heads)
-        self.expert_think = ExpertThink(d_model, num_heads)
+        self.expert_search = ExpertSearch(d_model, num_heads, rate)
+        self.expert_think = ExpertThink(d_model, num_heads, rate)
         self.gate_dense = layers.Dense(1, activation='sigmoid')
 
     def call(self, inputs, training=False):
@@ -136,10 +136,10 @@ class TransformerBlock(layers.Layer):
 
         stone_count = tf.reduce_sum(board, axis=[1, 2, 3])
         progress = tf.cast(stone_count, tf.float32) / 64.0
-        progress = tf.expand_dims(progress, -1) # (Batch, 1)
+        progress = tf.expand_dims(progress, -1)
 
         gate_val = self.gate_dense(progress)
-        gate_val_bc = tf.expand_dims(gate_val, -1) # (Batch, 1, 1)
+        gate_val_bc = tf.expand_dims(gate_val, -1)
 
         out_search = self.expert_search(x, training=training)
         out_think = self.expert_think(x, training=training)
@@ -147,23 +147,26 @@ class TransformerBlock(layers.Layer):
         return (1.0 - gate_val_bc) * out_search + gate_val_bc * out_think
 
 
-def build_model(input_shape=(8, 8, 2), d_model=32, num_blocks=3, num_heads=4):
+def build_model(input_shape=(8, 8, 2), d_model=32, num_blocks=3, num_heads=4, dropout_rate=0.2):
     inputs = layers.Input(shape=input_shape, dtype=tf.float32)
     x = layers.Reshape((64, 2))(inputs)
     x = layers.Dense(d_model)(x)
     x = TokenAndPositionEmbedding(d_model, 64)([x, inputs])
 
     for _ in range(num_blocks):
-        x = TransformerBlock(d_model, num_heads)([x, inputs])
+        x = TransformerBlock(d_model, num_heads, rate=dropout_rate)([x, inputs])
 
     # Policy Head
-    policy_logits = layers.Dense(1, name="policy_logits")(x)
+    policy_x = layers.Dense(d_model, activation='relu', name="policy_hidden")(x)
+    policy_logits = layers.Dense(1, name="policy_logits")(policy_x)
     policy_logits = layers.Reshape((64,))(policy_logits)
     policy_head = layers.Activation('softmax', name='policy', dtype='float32')(policy_logits)
 
     # Value Head
-    value_pooled = layers.GlobalAveragePooling1D()(x)
-    value_head = layers.Dense(1, activation='tanh', name='value', dtype='float32')(value_pooled)
+    value_x = layers.Conv1D(64, 1, activation='relu')(x)
+    value_x = layers.Flatten()(value_x)
+    value_x = layers.Dense(128, activation='relu', name="value_hidden")(value_x)
+    value_head = layers.Dense(1, activation='tanh', name='value', dtype='float32')(value_x)
 
     model = models.Model(inputs=inputs, outputs=[policy_head, value_head])
 
@@ -171,6 +174,6 @@ def build_model(input_shape=(8, 8, 2), d_model=32, num_blocks=3, num_heads=4):
 
 
 if __name__ == '__main__':
-    model = build_model(d_model=28, num_blocks=1, num_heads=4)
+    model = build_model(d_model=28, num_blocks=4, num_heads=4)
     model.summary()
     print(f"Total Params: {model.count_params()}")

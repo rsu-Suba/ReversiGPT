@@ -25,8 +25,7 @@ def main():
     
     compressed_data = zlib.compress(weights_data, level=9)
     b85_str = base64.b85encode(compressed_data).decode('ascii')
-    
-    # Shortened variable names to save space
+
     part1 = r"""import sys
 import os
 import time
