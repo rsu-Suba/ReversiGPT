@@ -5,10 +5,10 @@ import sys
 import math
 import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy('mixed_float16')
+from keras import mixed_precision
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
 from AI.models.model_selector import try_load_model
+from AI.config_loader import load_config
 from AI.config import (
     NUM_GAMES_COMPARE,
     COMPARE_SIMS_N,
@@ -17,6 +17,8 @@ from AI.config import (
     Model1_Name,
     Model2_Name
 )
+
+mixed_precision.set_global_policy('mixed_float16')
 
 def _print_numpy_board(board_1d):
     print("  0 1 2 3 4 5 6 7")
@@ -35,9 +37,8 @@ def board_to_input_planes_tf(board_1d_tf, current_player_tf):
     board_2d_tf = tf.reshape(board_1d_tf, (8, 8))
     current_player_mask = tf.cast(tf.equal(board_2d_tf, current_player_tf), tf.float32)
     opponent_player_mask = tf.cast(tf.equal(board_2d_tf, 3 - current_player_tf), tf.float32)
-    player_plane += current_player_mask
-    opponent_plane += opponent_player_mask
-    return tf.stack([player_plane, opponent_plane], axis=-1)
+
+    return tf.stack([player_plane + current_player_mask, opponent_plane + opponent_player_mask], axis=-1)
 
 class MCTSNode:
     def __init__(self, game_board: ReversiBitboard, player, parent=None, move=None, prior_p=0.0):
@@ -52,7 +53,7 @@ class MCTSNode:
 
     def ucb_score(self, c_puct):
         if self.parent is None: return self.q_value
-        return -self.q_value + c_puct * self.prior_p * math.sqrt(self.parent.n_visits) / (1 + self.n_visits)
+        return self.q_value + c_puct * self.prior_p * math.sqrt(self.parent.n_visits) / (1 + self.n_visits)
 
     def select_child(self, c_puct):
         return max(self.children.values(), key=lambda child: child.ucb_score(c_puct))
@@ -151,8 +152,8 @@ class MCTS:
         return self.root
 
 class MCTS_AIPlayer:
-    def __init__(self, model_path, name, sims_per_move):
-        self.model = try_load_model(model_path)
+    def __init__(self, model_path, name, sims_per_move, config=None):
+        self.model = try_load_model(model_path, config=config)
         self.mcts = MCTS(self.model)
         self.name = name
         self.sims_per_move = sims_per_move
@@ -248,16 +249,18 @@ def simulate_game(player1_ai, player2_ai, verbose=False, black_thinks_like_white
     return winner, black_count, white_count, player1_q_values, player2_q_values
 
 def run_comparison(model1_path, model1_name, model2_path, model2_name, num_games, SIMS_N, game_verbose=False, black_thinks_like_white=False):
-    if not os.path.exists(model1_path):
-        print(f"Model 404 -> {model1_path}")
-        return "Error"
-    if not os.path.exists(model2_path):
-        print(f"Model 404 -> {model2_path}")
-        return "Error"
-
     print(f"--- Model compare: {model1_name} vs {model2_name} ---")
-    ai1 = MCTS_AIPlayer(model1_path, model1_name, SIMS_N)
-    ai2 = MCTS_AIPlayer(model2_path, model2_name, SIMS_N)
+    
+    config = load_config()
+    def get_config_for_path(path):
+        if "MoE-1" in path:
+            return load_config(type('Args', (), {'model': 'moe-1'}))
+        if "MoE-2" in path:
+            return load_config(type('Args', (), {'model': 'moe-2'}))
+        return config
+
+    ai1 = MCTS_AIPlayer(model1_path, model1_name, SIMS_N, config=get_config_for_path(model1_path))
+    ai2 = MCTS_AIPlayer(model2_path, model2_name, SIMS_N, config=get_config_for_path(model2_path))
 
     wins = {ai1.name: 0, ai2.name: 0, "Draw": 0}
     total_stones = {ai1.name: 0, ai2.name: 0}
@@ -332,6 +335,13 @@ def run_comparison(model1_path, model1_name, model2_path, model2_name, num_games
         return "Draw"
 
 if __name__ == "__main__":
+    m1_path = "./models/TF/MoE-1.h5"
+    m1_name = "MoE-1"
+    m2_path = "./models/TF/MoE-2.keras"
+    m2_name = "MoE-2"
 
-    winner_name = run_comparison(Model1_Path, Model1_Name, Model2_Path, Model2_Name, NUM_GAMES_COMPARE, COMPARE_SIMS_N, game_verbose=False, black_thinks_like_white=True)
+    games = 10
+    sims = 30
+
+    winner_name = run_comparison(m1_path, m1_name, m2_path, m2_name, games, sims, game_verbose=False, black_thinks_like_white=False)
     print(f"Winner: {winner_name}")

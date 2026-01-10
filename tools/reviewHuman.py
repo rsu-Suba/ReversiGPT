@@ -6,54 +6,21 @@ import tensorflow as tf
 import math
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
-from AI.models.transformer import TokenAndPositionEmbedding, TransformerBlock
+from AI.models.model_selector import try_load_model, custom_objects
+from keras import mixed_precision
+from AI.config_loader import load_config
 from AI.config import (
     R_SIMS_N,
     Model_Path,
     C_PUCT
 )
-from tensorflow.keras.optimizers.schedules import CosineDecay
+
+config = load_config()
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 MCTS_SIMS_PER_MOVE = R_SIMS_N
 MODEL_PATH = Model_Path
-
-@tf.keras.utils.register_keras_serializable()
-class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, initial_learning_rate, decay_steps, warmup_steps, alpha=0.0):
-        super(WarmupCosineDecay, self).__init__()
-        self.initial_learning_rate = initial_learning_rate
-        self.decay_steps = decay_steps
-        self.warmup_steps = warmup_steps
-        self.alpha = alpha
-        self.cosine_decay = CosineDecay(
-            initial_learning_rate=initial_learning_rate,
-            decay_steps=decay_steps - warmup_steps,
-            alpha=alpha
-        )
-
-    def __call__(self, step):
-        step = tf.cast(step, tf.float32)
-        warmup_percent_done = step / self.warmup_steps
-        warmup_learning_rate = self.initial_learning_rate * warmup_percent_done
-
-        is_warmup = step < self.warmup_steps
-
-        learning_rate = tf.cond(
-            is_warmup,
-            lambda: warmup_learning_rate,
-            lambda: self.cosine_decay(step - self.warmup_steps)
-        )
-        return learning_rate
-
-    def get_config(self):
-        return {
-            "initial_learning_rate": self.initial_learning_rate,
-            "decay_steps": self.decay_steps,
-            "warmup_steps": self.warmup_steps,
-            "alpha": self.alpha,
-        }
 
 def board_to_input_planes_tf(board_1d_tf, current_player_tf):
     player_plane = tf.zeros((8, 8), dtype=tf.float32)
@@ -78,7 +45,7 @@ class MCTSNode:
 
     def ucb_score(self, c_puct):
         if self.parent is None: return self.q_value
-        return -self.q_value + c_puct * self.prior_p * math.sqrt(self.parent.n_visits) / (1 + self.n_visits)
+        return self.q_value + c_puct * self.prior_p * math.sqrt(self.parent.n_visits) / (1 + self.n_visits)
 
     def select_child(self, c_puct):
         return max(self.children.values(), key=lambda child: child.ucb_score(c_puct))
@@ -245,14 +212,10 @@ def main():
 
     current_player = 1
 
-    try:
-        with tf.keras.utils.custom_object_scope({'TokenAndPositionEmbedding': TokenAndPositionEmbedding, 'TransformerBlock': TransformerBlock, 'WarmupCosineDecay': WarmupCosineDecay}):
-            model = tf.keras.models.load_model(MODEL_PATH)
-        print(f"Model loaded <- {MODEL_PATH}")
-        mcts_ai = MCTS(model)
-    except Exception as e:
-        print(f"Error while loading model {e}")
-        sys.exit(1)
+    # model
+    
+    model = try_load_model(MODEL_PATH, config=config)
+    mcts_ai = MCTS(model)
 
     while not game_board.is_game_over():
         turn_player_name = "You" if current_player == human_player else "AI"

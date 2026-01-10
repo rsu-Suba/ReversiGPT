@@ -1,255 +1,155 @@
 import numpy as np
 import random
+import os
 import tensorflow as tf
-from AI.models.transformer_model import TokenAndPositionEmbedding, TransformerBlock
-from AI.config import R_SIMS_N, C_PUCT, Model_Path, Play_Games_Num
+from AI.config import Play_Games_Num
+from AI.models.model_selector import try_load_model
 import math
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
+from keras import mixed_precision
+from AI.config_loader import load_config
 
+config = load_config()
+print(f"Loaded config for model: {config['model_name']}")
+
+try:
+    mixed_precision.set_global_policy('mixed_float16')
+except:
+    pass
+
+MCTS_SIMS_PER_MOVE = 5
 NUM_GAMES_TO_PLAY = Play_Games_Num
-MCTS_SIMS_PER_MOVE = R_SIMS_N
-MODEL_PATH = Model_Path
+MODEL_PATH = config.get('model_save_path', './models/TF/model.h5')
+C_PUCT = 5.0
 
 def board_to_input_planes_tf(board_1d_tf, current_player_tf):
-    player_plane = tf.zeros((8, 8), dtype=tf.float32)
-    opponent_plane = tf.zeros((8, 8), dtype=tf.float32)
     board_2d_tf = tf.reshape(board_1d_tf, (8, 8))
-    current_player_mask = tf.cast(tf.equal(board_2d_tf, current_player_tf), tf.float32)
-    opponent_player_mask = tf.cast(tf.equal(board_2d_tf, 3 - current_player_tf), tf.float32)
-    player_plane += current_player_mask
-    opponent_plane += opponent_player_mask
-    return tf.stack([player_plane, opponent_plane], axis=-1)
-
-def print_board_from_numpy(board_1d):
-    print("  0 1 2 3 4 5 6 7")
-    for r in range(8):
-        row_str = f"{r}"
-        for c in range(8):
-            piece = board_1d[r * 8 + c]
-            if piece == 1: row_str += "🔴"
-            elif piece == 2: row_str += "⚪️"
-            else: row_str += "🟩"
-        print(row_str)
-
-class RandomAI:
-    def get_move(self, game_board: ReversiBitboard, player):
-        valid_moves = game_board.get_legal_moves()
-        if not valid_moves:
-            return None
-        return random.choice(valid_moves)
+    me_mask = tf.cast(tf.equal(board_2d_tf, current_player_tf), tf.float32)
+    opp_mask = tf.cast(tf.equal(board_2d_tf, 3 - current_player_tf), tf.float32)
+    return tf.stack([me_mask, opp_mask], axis=-1)
 
 class MCTSNode:
-    def __init__(self, game_board: ReversiBitboard, player, parent=None, move=None, prior_p=0.0):
-        self.game_board = game_board
-        self.player = player
-        self.parent = parent
-        self.move = move
-        self.prior_p = prior_p
+    __slots__ = ['children', 'n_visits', 'q_value', 'prior_p']
+    def __init__(self, prior_p=0.0):
         self.children = {}
         self.n_visits = 0
         self.q_value = 0.0
+        self.prior_p = prior_p
 
-    def ucb_score(self, c_puct):
-        if self.parent is None: return self.q_value
-        return -self.q_value + c_puct * self.prior_p * math.sqrt(self.parent.n_visits) / (1 + self.n_visits)
+    def ucb_score(self, parent_visits, c_puct):
+        q = self.q_value if self.n_visits > 0 else 0.0
+        u = c_puct * self.prior_p * math.sqrt(parent_visits) / (1 + self.n_visits)
+        return q + u
 
-    def select_child(self, c_puct):
-        return max(self.children.values(), key=lambda child: child.ucb_score(c_puct))
-
-    def is_fully_expanded(self):
-        return len(self.children) == len(self.game_board.get_legal_moves())
-
-    def update(self, value):
+    def update(self, v):
         self.n_visits += 1
-        self.q_value += (value - self.q_value) / self.n_visits
+        self.q_value += (v - self.q_value) / self.n_visits
 
 class MCTS:
-    def __init__(self, model, c_puct=C_PUCT):
+    def __init__(self, model):
         self.model = model
-        self.c_puct = c_puct
         self._predict_graph = tf.function(
             self._predict_internal,
-            input_signature=[
-                tf.TensorSpec(shape=[64], dtype=tf.int8),
-                tf.TensorSpec(shape=(), dtype=tf.int8)
-            ]
+            input_signature=[tf.TensorSpec(shape=[64], dtype=tf.int8), tf.TensorSpec(shape=(), dtype=tf.int8)]
         )
 
     def _predict_internal(self, board_tensor, player_tensor):
         input_planes = board_to_input_planes_tf(board_tensor, player_tensor)
         input_tensor_batch = tf.expand_dims(input_planes, axis=0)
-        policy, value = self.model(input_tensor_batch, training=False)
-        return policy[0], value[0][0]
-
-    def _predict(self, board, player):
-        board_tensor = tf.convert_to_tensor(board, dtype=tf.int8)
-        player_tensor = tf.convert_to_tensor(player, dtype=tf.int8)
-        policy, value = self._predict_graph(board_tensor, player_tensor)
-        return policy.numpy(), value.numpy()
+        outputs = self.model(input_tensor_batch, training=False)
+        return outputs[0][0], outputs[1][0][0]
 
     def search(self, game_board: ReversiBitboard, player, num_simulations):
-        self.root = MCTSNode(game_board, player)
-        for _ in range(num_simulations):
-            node = self.root
-            sim_game_board = ReversiBitboard()
-            sim_game_board.black_board = game_board.black_board
-            sim_game_board.white_board = game_board.white_board
-            sim_game_board.current_player = game_board.current_player
-            sim_game_board.passed_last_turn = game_board.passed_last_turn
-            sim_player = player
-            path = [node]
+        root = MCTSNode()
 
-            while node.is_fully_expanded() and node.children and not sim_game_board.is_game_over():
-                selected_child = node.select_child(self.c_puct)
-                sim_game_board.apply_move(selected_child.move)
-                sim_player = sim_game_board.current_player
-                node = selected_child
-                path.append(node)
-
-            value = 0
-            if not sim_game_board.is_game_over():
-                valid_moves = sim_game_board.get_legal_moves()
-                if valid_moves:
-                    policy, value = self._predict(sim_game_board.board_to_numpy(), sim_player)
-                    masked_policy = {move: policy[move] for move in valid_moves}
-                    policy_sum = sum(masked_policy.values())
-                    if policy_sum > 0:
-                        masked_policy = {move: p / policy_sum for move, p in masked_policy.items()}
-                    else:
-                        masked_policy = {move: 1.0 / len(valid_moves) for move in valid_moves}
-
-                    for move, prior in masked_policy.items():
-                        if move not in node.children:
-                            new_game_board = ReversiBitboard()
-                            new_game_board.black_board = sim_game_board.black_board
-                            new_game_board.white_board = sim_game_board.white_board
-                            new_game_board.current_player = sim_game_board.current_player
-                            new_game_board.passed_last_turn = sim_game_board.passed_last_turn
-                            new_game_board.apply_move(move)
-                            new_player = new_game_board.current_player
-                            node.children[move] = MCTSNode(new_game_board, new_player, parent=node, move=move, prior_p=prior)
-                else:
-                    pass_player = 3 - sim_player
-                    if sim_game_board.get_legal_moves():
-                        _, value = self._predict(sim_game_board.board_to_numpy(), pass_player)
-                        value = -value
-                    else:
-                        winner = sim_game_board.get_winner()
-                        value = 0 if winner == 0 else (1 if winner == sim_player else -1)
-            else:
-                winner = sim_game_board.get_winner()
-                value = 0 if winner == 0 else (1 if winner == sim_player else -1)
-
-            for node_in_path in reversed(path):
-                perspective_value = value if node_in_path.player == sim_player else -value
-                node_in_path.update(perspective_value)
-
-        if not self.root.children:
-            return None, 0, 0
-
-        best_move = max(self.root.children.keys(), key=lambda move: self.root.children[move].n_visits)
-        return best_move, self.root.children[best_move].n_visits, self.root.children[best_move].q_value
-
-def play_game(mcts_ai, random_ai, mcts_player_is_black):
-    game_board = ReversiBitboard()
-    current_player = 1
-    mcts_q_values = []
-
-    while not game_board.is_game_over():
-        is_mcts_turn = (current_player == 1 and mcts_player_is_black) or (current_player == 2 and not mcts_player_is_black)
-
+        p_raw, _ = self._predict_graph(tf.convert_to_tensor(game_board.board_to_numpy(), dtype=tf.int8), 
+                                        tf.convert_to_tensor(player, dtype=tf.int8))
+        p_raw = p_raw.numpy()
         valid_moves = game_board.get_legal_moves()
-        if not valid_moves:
-            game_board.apply_move(-1)
-            current_player = 3 - current_player
-            continue
+        if not valid_moves: return None
+        p_sum = sum(p_raw[m] for m in valid_moves) + 1e-9
+        for m in valid_moves:
+            root.children[m] = MCTSNode(prior_p=p_raw[m] / p_sum)
 
-        if is_mcts_turn:
-            search_result = mcts_ai.search(game_board, current_player, MCTS_SIMS_PER_MOVE)
-            move = search_result[0] if search_result and search_result[0] is not None else -1
-            q_value = search_result[2] if search_result and search_result[2] is not None else 0.0
-            mcts_q_values.append(q_value)
+        for _ in range(num_simulations):
+            node = root
+            sim_board = ReversiBitboard()
+            sim_board.black_board, sim_board.white_board = game_board.black_board, game_board.white_board
+            sim_board.current_player = game_board.current_player
+            
+            path = []
+            while node.children and not sim_board.is_game_over():
+                parent_visits = node.n_visits if node.n_visits > 0 else 1
+                move, node = max(node.children.items(), key=lambda it: it[1].ucb_score(parent_visits, C_PUCT))
+                sim_board.apply_move(move)
+                path.append(node)
+            
+            if not sim_board.is_game_over():
+                p, v_raw = self._predict_graph(tf.convert_to_tensor(sim_board.board_to_numpy(), dtype=tf.int8), 
+                                               tf.convert_to_tensor(sim_board.current_player, dtype=tf.int8))
+                p, v_raw = p.numpy(), v_raw.numpy()
+                v_moves = sim_board.get_legal_moves()
+                if v_moves:
+                    s = sum(p[m] for m in v_moves) + 1e-9
+                    for m in v_moves:
+                        node.children[m] = MCTSNode(prior_p=p[m] / s)
+                    v = -float(v_raw)
+                else:
+                    _, v_pass = self._predict_graph(tf.convert_to_tensor(sim_board.board_to_numpy(), dtype=tf.int8), 
+                                                    tf.convert_to_tensor(3 - sim_board.current_player, dtype=tf.int8))
+                    v = float(v_pass)
+            else:
+                win = sim_board.get_winner()
+                if win == 0: v = 0.0
+                else:
+                    v = -1.0 if win == sim_board.current_player else 1.0
+
+            for n in reversed(path):
+                n.update(v)
+                v = -v
+            root.n_visits += 1
+
+        return max(root.children.items(), key=lambda it: it[1].n_visits)[0]
+
+def main():
+    print(f"--- MoE Competition (Sims={MCTS_SIMS_PER_MOVE}) ---")
+    model = try_load_model(MODEL_PATH, config)
+    mcts_ai = MCTS(model)
+    
+    wins, draws, total_stones = 0, 0, 0
+    for i in range(NUM_GAMES_TO_PLAY):
+        mcts_is_black = (i % 2 == 0)
+        board = ReversiBitboard()
+        cur = 1
+        
+        while not board.is_game_over():
+            valid = board.get_legal_moves()
+            if not valid:
+                board.apply_move(-1)
+            else:
+                if (cur == 1 and mcts_is_black) or (cur == 2 and not mcts_is_black):
+                    move = mcts_ai.search(board, cur, MCTS_SIMS_PER_MOVE)
+                else:
+                    move = random.choice(valid)
+                board.apply_move(move if move is not None else -1)
+            cur = 3 - cur
+        
+        b, w = board.count_set_bits(board.black_board), board.count_set_bits(board.white_board)
+        ai_stones = b if mcts_is_black else w
+        total_stones += ai_stones
+        
+        if ai_stones > 32:
+            res = "Win "; wins += 1
+        elif ai_stones == 32:
+            res = "Draw"; draws += 1
         else:
-            move = random_ai.get_move(game_board, current_player)
+            res = "Loss"
+            
+        print(f"G{i+1:2}: {res} (AI:{ai_stones:2} Bot:{64-ai_stones:2}) {'Black' if mcts_is_black else 'White'}")
 
-        if move is None or move == -1:
-            game_board.apply_move(-1)
-            current_player = 3 - current_player
-            continue
-
-        game_board.apply_move(move)
-        current_player = 3 - current_player
-
-    winner = game_board.get_winner()
-    if winner == 0:
-        result = "draw"
-    elif (winner == 1 and mcts_player_is_black) or (winner == 2 and not mcts_player_is_black):
-        result = "mcts_win"
-    else:
-        result = "random_win"
-    return result, game_board, mcts_q_values
-
+    win_rate = (wins / NUM_GAMES_TO_PLAY) * 100
+    avg_stones = total_stones / NUM_GAMES_TO_PLAY
+    print(f"\n[RESULT] WinRate: {win_rate:.1f}% | AvgStones: {avg_stones:.2f}")
 
 if __name__ == "__main__":
-    print("--- AI vs Random bot ---")
-    try:
-        with tf.keras.utils.custom_object_scope({'TokenAndPositionEmbedding': TokenAndPositionEmbedding, 'TransformerBlock': TransformerBlock}):
-            model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-        print(f"Model loaded <- {MODEL_PATH}")
-        mcts_ai = MCTS(model)
-    except Exception as e:
-        print(f"Error while loading model: {e}")
-        exit()
-    random_ai = RandomAI()
-
-    mcts_wins = 0
-    random_wins = 0
-    draws = 0
-    total_mcts_stones = 0
-    total_random_stones = 0
-    all_mcts_q_values = []
-
-    for i in range(NUM_GAMES_TO_PLAY):
-        mcts_is_black = random.choice([True, False])
-        # print(f"\n--- Game {i+1}/{NUM_GAMES_TO_PLAY} | AI: {'Black' if mcts_is_black else 'White'} ---")
-        result, final_board, mcts_q_values = play_game(mcts_ai, random_ai, mcts_is_black)
-        all_mcts_q_values.extend(mcts_q_values)
-
-        black_stones = final_board.count_set_bits(final_board.black_board)
-        white_stones = final_board.count_set_bits(final_board.white_board)
-
-        if mcts_is_black:
-            mcts_score = black_stones
-            random_score = white_stones
-        else:
-            mcts_score = white_stones
-            random_score = black_stones
-
-        total_mcts_stones += mcts_score
-        total_random_stones += random_score
-
-        if result == "mcts_win":
-            mcts_wins += 1
-            # print(f"Game {i+1} result: AI Win")
-        elif result == "random_win":
-            random_wins += 1
-            # print(f"Game {i+1} result: Random bot Win")
-            final_board_numpy = final_board.board_to_numpy()
-            print_board_from_numpy(final_board_numpy)
-        else:
-            draws += 1
-            # print(f"Game {i+1} result: Draw")
-
-        # print(f"Scores - Black: {black_stones}, White: {white_stones}")
-
-    print("\n--- Result ---")
-    print(f"Games: {NUM_GAMES_TO_PLAY}")
-    print(f"AI wins: {mcts_wins} ({((mcts_wins / NUM_GAMES_TO_PLAY) * 100):.2f}%) ")
-    print(f"Bot wins: {random_wins}")
-    print(f"Draws: {draws}")
-    print(f"AI average stones: {total_mcts_stones / NUM_GAMES_TO_PLAY:.2f}")
-    print(f"Random bot average stones: {total_random_stones / NUM_GAMES_TO_PLAY:.2f}")
-    if all_mcts_q_values:
-        print(f"AI average Q value: {np.mean(all_mcts_q_values):.4f}")
-    else:
-        print("No Q value data for AI.")
+    main()

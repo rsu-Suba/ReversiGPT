@@ -27,8 +27,8 @@ from AI.config import (
     SELF_PLAY_MODEL_PATH,
     MCTS_PREDICT_BATCH_SIZE
 )
-import AI.models.dynamic_MoE as dynamic_moe_model
-from AI.training.train_loop import WarmupCosineDecay
+import AI.models.MoE_1 as dynamic_moe_model
+from AI.training.scheduler import WarmupCosineDecay
 
 try:
     config = load_config()
@@ -59,10 +59,11 @@ def create_shm_array(shm, shape, dtype):
 
 def prediction_worker(model_path, shm_names, shapes, stop_event, is_moe=False):
     import tensorflow as tf
-    from tensorflow.keras import mixed_precision
+    import keras
+    from keras import mixed_precision
 
     if is_moe:
-        from AI.models.dynamic_MoE import DynamicAssembly, TokenAndPositionEmbedding
+        from AI.models.MoE_1 import DynamicAssembly, TokenAndPositionEmbedding
         print("[PredictionWorker] Using MoE architecture (AI.models.static_MoE)")
     else:
         from AI.models.transformer import TransformerBlock, TokenAndPositionEmbedding

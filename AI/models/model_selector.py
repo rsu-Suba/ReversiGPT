@@ -1,116 +1,93 @@
 import os
 import sys
 import tensorflow as tf
+import keras
+import AI.models.MoE_1 as moe_1
+import AI.models.MoE_2 as moe_2
 import AI.models.transformer as transformer_model
-import AI.models.static_MoE as static_moe_model
-import AI.models.dynamic_MoE as dynamic_moe_model
-import AI.models.switch_MoE as switch_moe_model
-import AI.models.old_dynamic_MoE as old_dynamic_moe_model
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from AI.training.scheduler import WarmupCosineDecay
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__name__), '..')))
 
-def try_load_model(model_path):
+custom_objects = {
+    'MHA': moe_1.MHA,
+    'FFN': moe_1.FFN,
+    'DynamicAssembly': moe_1.DynamicAssembly,
+    'TokenAndPositionEmbedding': moe_1.TokenAndPositionEmbedding,
+    
+    'fast_gelu': moe_2.fast_gelu,
+    'pos_embedding_logic': moe_2.pos_embedding_logic,
+    'stone_count_logic': moe_2.stone_count_logic,
+    'move_calc_logic': moe_2.move_calc_logic,
+    'slice_prob_logic': moe_2.slice_prob_logic
+}
+
+def identify_architecture(model):
+    layer_names = [l.name for l in model.layers]
+    for name in layer_names:
+        if 'moe_block' in name:
+            return 'moe_2'
+        
+    all_layers = []
+    def _collect(m):
+        if hasattr(m, 'layers'):
+            for l in m.layers:
+                all_layers.append(l)
+                _collect(l)
+    _collect(model)
+    
+    for l in all_layers:
+        type_name = type(l).__name__
+        if 'DynamicAssembly' in type_name: return 'moe_1'
+        if 'TransformerBlock' in type_name: return 'transformer'
+        
+    return 'unknown'
+
+def try_load_model(model_path, config=None):
     try:
-        custom_objects = {
-            'TokenAndPositionEmbedding': transformer_model.TokenAndPositionEmbedding,
-            'TransformerBlock': transformer_model.TransformerBlock
-        }
         with tf.keras.utils.custom_object_scope(custom_objects):
-            model = tf.keras.models.load_model(model_path)
-            print(f"Successfully loaded model as Transformer: {model_path}")
+            model = tf.keras.models.load_model(model_path, compile=False)
+            arch = identify_architecture(model)
+            print(f"Successfully loaded model directly. Identified architecture: {arch.upper()} ({model_path})")
             return model
     except Exception as e:
+        print(f"Direct load failed (will try fallback): {e}")
         pass
 
-    try:
-        custom_objects = {
-            'TokenAndPositionEmbedding': dynamic_moe_model.TokenAndPositionEmbedding,
-            'MHA': dynamic_moe_model.MHA,
-            'FFN': dynamic_moe_model.FFN,
-            'DynamicAssembly': dynamic_moe_model.DynamicAssembly
-        }
-        with tf.keras.utils.custom_object_scope(custom_objects):
-            model = tf.keras.models.load_model(model_path)
-            print(f"Successfully loaded model as Dynamic MoE: {model_path}")
+    if config:
+        try:
+            print(f"Building model from config for {model_path}")
+            model = create_model(config)
+            _build_and_load_weights(model, model_path)
             return model
-    except Exception as e:
-        pass
+        except Exception as e:
+            raise ValueError(f"Failed to build/load model from config: {e}")
 
+    raise ValueError(f"Could not load model {model_path}. Direct load failed and no config provided.")
+
+def _build_and_load_weights(model, weights_path):
+    if not os.path.exists(weights_path):
+        print(f"No weight file found at {weights_path}. Starting with fresh weights.")
+        return
+
+    dummy_board = tf.zeros((1, 8, 8, 2))
     try:
-        custom_objects = {
-            'TokenAndPositionEmbedding': old_dynamic_moe_model.TokenAndPositionEmbedding,
-            'MHA': old_dynamic_moe_model.MHA,
-            'FFN': old_dynamic_moe_model.FFN,
-            'DynamicAssembly': old_dynamic_moe_model.DynamicAssembly
-        }
-        with tf.keras.utils.custom_object_scope(custom_objects):
-            model = tf.keras.models.load_model(model_path)
-            print(f"Successfully loaded model as Old Dynamic MoE (Backup): {model_path}")
-            return model
-    except Exception as e:
+        model(dummy_board)
+    except Exception:
         pass
-
+        
     try:
-        custom_objects = {
-            'TokenAndPositionEmbedding': static_moe_model.TokenAndPositionEmbedding,
-            'TransformerBlock': static_moe_model.TransformerBlock,
-            'ExpertSearch': static_moe_model.ExpertSearch,
-            'ExpertThink': static_moe_model.ExpertThink
-        }
-        with tf.keras.utils.custom_object_scope(custom_objects):
-            model = tf.keras.models.load_model(model_path)
-            print(f"Successfully loaded model as Static MoE: {model_path}")
-            return model
+        model.load_weights(weights_path, skip_mismatch=True)
+        print(f"Weights restored from {weights_path}")
     except Exception as e:
-        pass
-
-    try:
-        custom_objects = {
-            'TokenAndPositionEmbedding': switch_moe_model.TokenAndPositionEmbedding,
-            'PhaseExpert': switch_moe_model.PhaseExpert,
-            'PhaseTransformerBlock': switch_moe_model.PhaseTransformerBlock,
-            'build_model': switch_moe_model.build_model,
-        }
-        with tf.keras.utils.custom_object_scope(custom_objects):
-            model = tf.keras.models.load_model(model_path)
-            print(f"Successfully loaded model as Switch MoE: {model_path}")
-            return model
-    except Exception as e:
-        pass
-
-    raise ValueError(f"Could not load model {model_path} with any known architecture.")
+        print(f"Failed to load weights from {weights_path}: {e}")
+        raise e
 
 def create_model(config):
     arch = config.get('arch', 'transformer').lower()
-    print(f"Creating model architecture: {arch}")
-
-    if arch == 'switch':
-        return switch_moe_model.build_model(
-            d_model=config['embed_dim'],
-            num_blocks=config['block'],
-            num_heads=config['head'],
-            dropout_rate=config.get('dropout_rate', 0.25)
-        )
-    elif arch == 'dynamic':
-        return dynamic_moe_model.build_model(
-            d_model=config['embed_dim'],
-            num_blocks=config['block'],
-            num_heads=config['head'],
-            num_mha=config.get('num_mha', 2),
-            num_ffn=config.get('num_ffn', 2),
-            steps=config.get('steps', 3),
-            dropout_rate=config.get('dropout_rate', 0.25)
-        )
-    elif arch == 'static':
-        return static_moe_model.build_model(
-            d_model=config['embed_dim'],
-            num_blocks=config['block'],
-            num_heads=config['head'],
-            dropout_rate=config.get('dropout_rate', 0.1)
-        )
+    if arch == 'moe_2':
+        return moe_2.build_model(config)
+    elif arch == 'moe_1':
+        return moe_1.build_model(config)
     else:
         return transformer_model.build_model(
-            d_model=config['embed_dim'],
-            num_blocks=config['block'],
-            num_heads=config['head']
+            d_model=config['embed_dim'], num_blocks=config['block'], num_heads=config['head']
         )

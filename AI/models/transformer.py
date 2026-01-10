@@ -29,9 +29,9 @@ class TokenAndPositionEmbedding(layers.Layer):
         return x + tf.cast(r_emb, x.dtype) + tf.cast(c_emb, x.dtype)
 
 class TransformerBlock(layers.Layer):
-    def __init__(self, d_model, num_heads, rate=0.2, **kwargs):
+    def __init__(self, d_model, num_heads, rate=0.2, ff_dim=None, **kwargs):
         super().__init__(**kwargs)
-        ff_dim = d_model * 4
+        if ff_dim is None: ff_dim = d_model * 4
         self.att = layers.MultiHeadAttention(num_heads=num_heads, key_dim=d_model//num_heads)
         self.ffn = keras.Sequential([layers.Dense(ff_dim, activation='gelu'), layers.Dense(d_model),])
         self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
@@ -60,14 +60,14 @@ class TransformerBlock(layers.Layer):
 
         return tf.cast(x_f32, inputs.dtype)
 
-def build_model(input_shape=(8, 8, 2), d_model=64, num_blocks=4, num_heads=4):
+def build_model(input_shape=(8, 8, 2), d_model=64, num_blocks=4, num_heads=4, ff_dim=None):
     inputs = layers.Input(shape=input_shape, dtype=tf.float32)
     x = layers.Reshape((64, 2))(inputs)
     x = layers.Dense(d_model)(x)
     x = TokenAndPositionEmbedding(64, d_model)(x)
 
     for _ in range(num_blocks):
-        x = TransformerBlock(d_model, num_heads)(x)
+        x = TransformerBlock(d_model, num_heads, ff_dim=ff_dim)(x)
 
     # Policy Head
     policy_x = layers.Dense(d_model, activation='relu', name="policy_hidden")(x)
@@ -76,9 +76,9 @@ def build_model(input_shape=(8, 8, 2), d_model=64, num_blocks=4, num_heads=4):
     policy_head = layers.Activation('softmax', name='policy', dtype='float32')(policy_logits)
 
     # Value Head
-    value_x = layers.Conv1D(16, 1, activation='relu')(x)
+    value_x = layers.Conv1D(d_model // 4, 1, activation='relu')(x)
     value_x = layers.Flatten()(value_x)
-    value_x = layers.Dense(64, activation='relu', name="value_hidden")(value_x)
+    value_x = layers.Dense(d_model, activation='relu', name="value_hidden")(value_x)
     value_head = layers.Dense(1, activation='tanh', name='value', dtype='float32')(value_x)
 
     model = models.Model(inputs=inputs, outputs=[policy_head, value_head])
