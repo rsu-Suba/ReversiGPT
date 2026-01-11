@@ -10,7 +10,6 @@ import multiprocessing
 from multiprocessing import shared_memory
 import traceback
 from datetime import datetime
-
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
 from AI.cpp.reversi_mcts_cpp import MCTS as MCTS_CPP
 import uuid
@@ -27,7 +26,7 @@ from AI.config import (
     SELF_PLAY_MODEL_PATH,
     MCTS_PREDICT_BATCH_SIZE
 )
-import AI.models.MoE_1 as dynamic_moe_model
+import AI.models.MoE_2 as dynamic_moe_model
 from AI.training.scheduler import WarmupCosineDecay
 
 try:
@@ -63,8 +62,8 @@ def prediction_worker(model_path, shm_names, shapes, stop_event, is_moe=False):
     from keras import mixed_precision
 
     if is_moe:
-        from AI.models.MoE_1 import DynamicAssembly, TokenAndPositionEmbedding
-        print("[PredictionWorker] Using MoE architecture (AI.models.static_MoE)")
+        # from AI.models.MoE_1 import DynamicAssembly, TokenAndPositionEmbedding
+        print("[PredictionWorker] Using MoE architecture (AI.models.MoE_2)")
     else:
         from AI.models.transformer import TransformerBlock, TokenAndPositionEmbedding
         print("[PredictionWorker] Using Standard Transformer architecture (AI.models.transformer)")

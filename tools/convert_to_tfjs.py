@@ -7,7 +7,7 @@ import shutil
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from AI.models.old_transformer import TokenAndPositionEmbedding, TransformerBlock as OriginalTransformerBlock
+from AI.models.transformer import TokenAndPositionEmbedding, TransformerBlock as OriginalTransformerBlock
 from AI.training.scheduler import WarmupCosineDecay
 
 MODEL_PATH = 'models/TF/3G.h5'

@@ -1,197 +1,82 @@
+#!/usr/bin/env python3
 import sys
 import os
+import argparse
 import random
 import numpy as np
 import tensorflow as tf
 import math
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Determine project root and add to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from AI.cpp.reversi_bitboard_cpp import ReversiBitboard
-from AI.models.model_selector import try_load_model, custom_objects
-from keras import mixed_precision
+from AI.cpp.reversi_mcts_cpp import MCTS  # Use C++ MCTS
+from AI.models.model_selector import try_load_model
 from AI.config_loader import load_config
-from AI.config import (
-    R_SIMS_N,
-    Model_Path,
-    C_PUCT
-)
+from AI.config import C_PUCT, R_SIMS_N, MCTS_PREDICT_BATCH_SIZE
 
-config = load_config()
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
-
-MCTS_SIMS_PER_MOVE = R_SIMS_N
-MODEL_PATH = Model_Path
-
-def board_to_input_planes_tf(board_1d_tf, current_player_tf):
-    player_plane = tf.zeros((8, 8), dtype=tf.float32)
-    opponent_plane = tf.zeros((8, 8), dtype=tf.float32)
-    board_2d_tf = tf.reshape(board_1d_tf, (8, 8))
-    current_player_mask = tf.cast(tf.equal(board_2d_tf, current_player_tf), tf.float32)
-    opponent_player_mask = tf.cast(tf.equal(board_2d_tf, 3 - current_player_tf), tf.float32)
-    player_plane += current_player_mask
-    opponent_plane += opponent_player_mask
-    return tf.stack([player_plane, opponent_plane], axis=-1)
-
-class MCTSNode:
-    def __init__(self, game_board: ReversiBitboard, player, parent=None, move=None, prior_p=0.0):
-        self.game_board = game_board
-        self.player = player
-        self.parent = parent
-        self.move = move
-        self.prior_p = prior_p
-        self.children = {}
-        self.n_visits = 0
-        self.q_value = 0.0
-
-    def ucb_score(self, c_puct):
-        if self.parent is None: return self.q_value
-        return self.q_value + c_puct * self.prior_p * math.sqrt(self.parent.n_visits) / (1 + self.n_visits)
-
-    def select_child(self, c_puct):
-        return max(self.children.values(), key=lambda child: child.ucb_score(c_puct))
-
-    def is_fully_expanded(self):
-        return len(self.children) == len(self.game_board.get_legal_moves())
-
-    def update(self, value):
-        self.n_visits += 1
-        self.q_value += (value - self.q_value) / self.n_visits
-
-class MCTS:
-    def __init__(self, model, c_puct=C_PUCT):
-        self.model = model
-        self.c_puct = c_puct
-        self._predict_graph = tf.function(
-            self._predict_internal,
-            input_signature=[
-                tf.TensorSpec(shape=[64], dtype=tf.int8),
-                tf.TensorSpec(shape=(), dtype=tf.int8)
-            ]
-        )
-
-    def _predict_internal(self, board_tensor, player_tensor):
-        input_planes = board_to_input_planes_tf(board_tensor, player_tensor)
-        input_tensor_batch = tf.expand_dims(input_planes, axis=0)
-        policy, value = self.model(input_tensor_batch, training=False)
-        return policy[0], value[0][0]
-
-    def _predict(self, board, player):
-        board_tensor = tf.convert_to_tensor(board, dtype=tf.int8)
-        player_tensor = tf.convert_to_tensor(player, dtype=tf.int8)
-        policy, value = self._predict_graph(board_tensor, player_tensor)
-        return policy.numpy(), value.numpy()
-
-    def search(self, game_board: ReversiBitboard, player, num_simulations):
-        self.root = MCTSNode(game_board, player)
-        for _ in range(num_simulations):
-            node = self.root
-            sim_game_board = ReversiBitboard()
-            sim_game_board.black_board = game_board.black_board
-            sim_game_board.white_board = game_board.white_board
-            sim_game_board.current_player = game_board.current_player
-            sim_game_board.passed_last_turn = game_board.passed_last_turn
-            sim_player = player
-            path = [node]
-
-            while node.is_fully_expanded() and node.children and not sim_game_board.is_game_over():
-                selected_child = node.select_child(self.c_puct)
-                sim_game_board.apply_move(selected_child.move)
-                sim_player = sim_game_board.current_player
-                node = selected_child
-                path.append(node)
-
-            value = 0
-            if not sim_game_board.is_game_over():
-                valid_moves = sim_game_board.get_legal_moves()
-                if valid_moves:
-                    policy, value = self._predict(sim_game_board.board_to_numpy(), sim_player)
-                    masked_policy = {move: policy[move] for move in valid_moves}
-                    policy_sum = sum(masked_policy.values())
-                    if policy_sum > 0:
-                        masked_policy = {move: p / policy_sum for move, p in masked_policy.items()}
-                    else:
-                        masked_policy = {move: 1.0 / len(valid_moves) for move in valid_moves}
-
-                    for move, prior in masked_policy.items():
-                        if move not in node.children:
-                            new_game_board = ReversiBitboard()
-                            new_game_board.black_board = sim_game_board.black_board
-                            new_game_board.white_board = sim_game_board.white_board
-                            new_game_board.current_player = sim_game_board.current_player
-                            new_game_board.passed_last_turn = sim_game_board.passed_last_turn
-                            new_game_board.apply_move(move)
-                            new_player = new_game_board.current_player
-                            node.children[move] = MCTSNode(new_game_board, new_player, parent=node, move=move, prior_p=prior)
-                else:
-                    pass_player = 3 - sim_player
-                    if sim_game_board.get_legal_moves():
-                        _, value = self._predict(sim_game_board.board_to_numpy(), pass_player)
-                        value = -value
-                    else:
-                        winner = sim_game_board.get_winner()
-                        value = 0 if winner == 0 else (1 if winner == sim_player else -1)
-            else:
-                winner = sim_game_board.get_winner()
-                value = 0 if winner == 0 else (1 if winner == sim_player else -1)
-
-            for node_in_path in reversed(path):
-                perspective_value = value if node_in_path.player == sim_player else -value
-                node_in_path.update(perspective_value)
-
-        if not self.root.children:
-            return None, 0, 0
-
-        best_move = max(self.root.children.keys(), key=lambda move: self.root.children[move].n_visits)
-        return best_move, self.root.children[best_move].n_visits, self.root.children[best_move].q_value
-
-
-def print_board(board_1d):
+def print_board(board_1d, legal_moves=None):
     print("  A B C D E F G H")
     for r in range(8):
-        row_str = "";
+        row_str = ""
         for c in range(8):
-            piece = board_1d[r * 8 + c]
+            idx = r * 8 + c
+            piece = board_1d[idx]
             if piece == 1:
                 row_str += "🔴"
             elif piece == 2:
                 row_str += "⚪️"
             else:
-                row_str += "🟩"
+                if legal_moves and idx in legal_moves:
+                    row_str += "🟦" # Hint for legal move
+                else:
+                    row_str += "🟩"
         print(f"{r+1}{row_str}")
 
 def get_human_move(legal_moves):
     while True:
         try:
-            move_str = input("Your turn 🫵 (a1, pass): ").strip()
+            move_str = input("Your turn 🫵 (e.g. A1): ").strip()
             if move_str.lower() == "pass":
                 if -1 in legal_moves:
                     return -1
                 else:
-                    print("❌️Can't pass")
+                    print("❌ Cannot pass when legal moves exist.")
                     continue
 
-            if len(move_str) != 2:
-                raise ValueError("❌️Invalid move.")
+            if len(move_str) < 2:
+                raise ValueError("Invalid format.")
 
             col_char = move_str[0].upper()
-            row_char = move_str[1]
+            row_char = move_str[1:]
+            
+            if not row_char.isdigit():
+                 raise ValueError("Invalid row.")
 
-            if not ('A' <= col_char <= 'H' and '1' <= row_char <= '8'):
-                raise ValueError("❌️Invalid move.")
+            if not ('A' <= col_char <= 'H'):
+                raise ValueError("Invalid column.")
 
             col = ord(col_char) - ord('A')
             row = int(row_char) - 1
+            
+            if not (0 <= row < 8):
+                 raise ValueError("Row out of bounds.")
+
             move = row * 8 + col
 
             if move not in legal_moves:
-                print(f"❌️Invalid move.: {move_str}")
-                print(f"Pleaceable: {[index_to_coord(m) for m in legal_moves if m != -1]}")
+                print(f"❌ Invalid move: {move_str}")
+                print(f"Valid moves: {[index_to_coord(m) for m in legal_moves if m != -1]}")
                 continue
             return move
         except ValueError as e:
-            print(f"Error: {e}, Enter again")
+            print(f"Error: {e}. Please enter again (e.g. D3).")
         except Exception as e:
-            print(f"Unexpected error: {e}, Enter again")
+            print(f"Unexpected error: {e}. Try again.")
 
 def index_to_coord(index):
     if index == -1:
@@ -201,29 +86,121 @@ def index_to_coord(index):
     return f"{chr(ord('A') + col)}{row + 1}"
 
 def main():
+    parser = argparse.ArgumentParser(description="Othello Human vs AI")
+    parser.add_argument('--model', type=str, default='models/TF/MoE-2.keras', help='Path to the model file')
+    parser.add_argument('--sims', type=int, default=R_SIMS_N, help='Number of MCTS simulations per move')
+    parser.add_argument('--color', type=str, choices=['black', 'white', 'random'], default='random', help='Human player color')
+    args = parser.parse_args()
+
+    # Resolve model path
+    model_path = args.model
+    if not os.path.isabs(model_path):
+        model_path = os.path.join(project_root, model_path)
+    
+    print(f"Loading model from: {model_path}")
+    
+    # Avoid config_loader parsing command line args automatically which causes error for file paths
+    class DummyArgs:
+        def __init__(self):
+            self.model = 'moe-2' # Default fallback
+    
+    try:
+        # First try to load config based on the filename stem if it matches a yaml key
+        # But here we are dealing with file paths, so we just load a default config as a fallback/base
+        # The model_selector.identify_architecture will likely handle the specifics for h5 files
+        config = load_config(DummyArgs())
+    except Exception as e:
+        print(f"Warning: Could not load config (using default/none): {e}")
+        config = None
+
+    try:
+        keras_model = try_load_model(model_path, config=config)
+        if keras_model is None:
+             raise ValueError("Model loaded as None.")
+    except Exception as e:
+        print(f"Failed to load model: {e}")
+        return
+
+    # Wrapper to bridge C++ MCTS and Keras Model
+    class ModelWrapper:
+        def __init__(self, model):
+            self.model = model
+            self.predict_func = tf.function(
+                self._predict_tf,
+                input_signature=[
+                    tf.TensorSpec(shape=[None, 64], dtype=tf.int8),
+                    tf.TensorSpec(shape=[None], dtype=tf.int32) 
+                ]
+            )
+
+        def board_to_input_planes_tf(self, board_1d_tf, current_player_tf):
+            # board_1d_tf: [Batch, 64]
+            # current_player_tf: [Batch]
+            
+            batch_size = tf.shape(board_1d_tf)[0]
+            board_2d = tf.reshape(board_1d_tf, (batch_size, 8, 8)) # [B, 8, 8]
+            
+            # Create masks
+            # player_tf is 1 or 2. board contains 1 (black), 2 (white).
+            # We need to broadcast player to [B, 8, 8]
+            player_broadcast = tf.reshape(current_player_tf, (batch_size, 1, 1))
+            player_broadcast = tf.tile(player_broadcast, [1, 8, 8])
+            
+            player_mask = tf.cast(tf.equal(board_2d, tf.cast(player_broadcast, tf.int8)), tf.float32)
+            opponent_mask = tf.cast(tf.equal(board_2d, tf.cast(3 - player_broadcast, tf.int8)), tf.float32)
+            
+            # Stack to [B, 8, 8, 2]
+            return tf.stack([player_mask, opponent_mask], axis=-1)
+
+        def _predict_tf(self, board_batch, player_batch):
+            input_planes = self.board_to_input_planes_tf(board_batch, player_batch)
+            policy, value = self.model(input_planes, training=False)
+            return policy, value
+
+        def _predict_internal_cpp(self, board_batch_np, player_batch_np):
+            # board_batch_np: numpy array [B, 64] (int8)
+            # player_batch_np: list or numpy array [B]
+            
+            board_tensor = tf.convert_to_tensor(board_batch_np, dtype=tf.int8)
+            # Ensure player is int32 for TF
+            player_tensor = tf.convert_to_tensor(player_batch_np, dtype=tf.int32)
+            
+            policy, value = self.predict_func(board_tensor, player_tensor)
+            
+            return policy.numpy(), value.numpy()
+
+    wrapped_model = ModelWrapper(keras_model)
+
+    # Use C++ MCTS
+    # For human review, a smaller batch size (like 1 or 4) is better for search quality 
+    # than the large batch size used for parallel self-play.
+    mcts_batch_size = 1 
+    mcts_ai = MCTS(wrapped_model, C_PUCT, mcts_batch_size)
+    
     game_board = ReversiBitboard()
 
-    human_player = random.choice([1, 2])
+    if args.color == 'random':
+        human_player = random.choice([1, 2])
+    elif args.color == 'black':
+        human_player = 1
+    else:
+        human_player = 2
+
     ai_player = 3 - human_player
 
-    human_color = "Black 🔴" if human_player == 1 else "White ⚪️"
-    ai_color = "White ⚪️" if ai_player == 2 else "Black 🔴"
-    print(f"You : {human_color}, AI : {ai_color}")
+    human_color_str = "Black 🔴" if human_player == 1 else "White ⚪️"
+    ai_color_str = "White ⚪️" if ai_player == 2 else "Black 🔴"
+    print(f"You : {human_color_str}, AI : {ai_color_str}")
 
     current_player = 1
-
-    # model
-    
-    model = try_load_model(MODEL_PATH, config=config)
-    mcts_ai = MCTS(model)
 
     while not game_board.is_game_over():
         turn_player_name = "You" if current_player == human_player else "AI"
         turn_color = "Black" if current_player == 1 else "White"
-        print(f"\n--- Now turn: {turn_color} ({turn_player_name}) ---")
-        print_board(game_board.board_to_numpy())
-
+        print(f"\n--- Turn: {turn_color} ({turn_player_name}) ---")
+        
         legal_moves = game_board.get_legal_moves()
+        print_board(game_board.board_to_numpy(), legal_moves if current_player == human_player else None)
 
         if not legal_moves:
             print(f"{turn_color} has no legal moves -> pass")
@@ -234,15 +211,34 @@ def main():
         if current_player == human_player:
             move = get_human_move(legal_moves)
         else:
-            print("AI 🤔🤔🤔...")
-            search_result = mcts_ai.search(game_board, current_player, MCTS_SIMS_PER_MOVE)
-            move = search_result[0] if search_result and search_result[0] is not None else -1
-            print(f"AI 😓👍: {index_to_coord(move)}")
+            print(f"AI is thinking ({args.sims} sims)...")
+            # C++ search: (board, player, num_simulations, add_noise)
+            # Returns MCTSNode (the root of the search)
+            root_node = mcts_ai.search(game_board, current_player, args.sims, False)
+            
+            # Find the best child from the root
+            best_move = -1
+            best_visits = -1
+            best_q = 0.0
+            
+            children = root_node.children
+            if children:
+                # Select the move with the most visits
+                best_move = max(children.keys(), key=lambda m: children[m].n_visits)
+                best_child = children[best_move]
+                best_visits = best_child.n_visits
+                best_q = best_child.q_value
+            
+            move = best_move
+            print(f"AI plays: {index_to_coord(move)}")
+            if move != -1:
+                 print(f"  Confidence (visits): {best_visits}")
+                 print(f"  Value (Q): {best_q:.4f}")
 
         game_board.apply_move(move)
         current_player = 3 - current_player
 
-    print("\n--- Game finish ---")
+    print("\n--- Game Over ---")
     print_board(game_board.board_to_numpy())
 
     winner = game_board.get_winner()
@@ -253,9 +249,9 @@ def main():
     if winner == 0:
         print("Draw")
     elif winner == human_player:
-        print("You won")
+        print("You won! 🎉")
     else:
-        print("AI won")
+        print("AI won! 🤖")
 
 if __name__ == "__main__":
     main()

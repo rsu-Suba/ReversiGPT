@@ -20,7 +20,7 @@ except:
 MCTS_SIMS_PER_MOVE = 5
 NUM_GAMES_TO_PLAY = Play_Games_Num
 MODEL_PATH = config.get('model_save_path', './models/TF/model.h5')
-C_PUCT = 5.0
+C_PUCT = 4.0
 
 def board_to_input_planes_tf(board_1d_tf, current_player_tf):
     board_2d_tf = tf.reshape(board_1d_tf, (8, 8))

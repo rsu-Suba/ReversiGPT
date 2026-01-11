@@ -86,10 +86,9 @@ std::shared_ptr<MCTSNode> MCTS::search(ReversiBitboard& board, int player, int n
                 if (winner != 0) {
                     value = (winner == node->player) ? 1.0 : -1.0;
                 }
-                for (int i = path.size() - 1; i >= 1; --i) {
-                    path[i-1]->update(-value);
-                }
-                node->n_visits++; 
+                // Fix: Use recursive update instead of manual loop to avoid double-counting/cancellation
+                node->update(value);
+                
                 sims_done++;
                 continue;
             }

@@ -83,6 +83,8 @@ if __name__ == "__main__":
         for f in glob.glob(os.path.join(d, "*.tfrecord")): os.remove(f)
 
     msgpack_files = glob.glob(os.path.join(source_dir, '*.msgpack'))
+    print(f"DEBUG: Searching in {source_dir}")
+    print(f"DEBUG: Found {len(msgpack_files)} msgpack files.")
     if not msgpack_files: exit()
     
     random.shuffle(msgpack_files)

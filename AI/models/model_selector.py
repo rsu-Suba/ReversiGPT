@@ -11,7 +11,11 @@ custom_objects = {
     'MHA': moe_1.MHA,
     'FFN': moe_1.FFN,
     'DynamicAssembly': moe_1.DynamicAssembly,
-    'TokenAndPositionEmbedding': moe_1.TokenAndPositionEmbedding,
+    # 'TokenAndPositionEmbedding': moe_1.TokenAndPositionEmbedding, # Comented out to fix 3G.h5 loading
+    'TokenAndPositionEmbedding': transformer_model.TokenAndPositionEmbedding, # Use Transformer version
+    
+    # Register Transformer classes
+    'TransformerBlock': transformer_model.TransformerBlock,
     
     'fast_gelu': moe_2.fast_gelu,
     'pos_embedding_logic': moe_2.pos_embedding_logic,
@@ -19,6 +23,12 @@ custom_objects = {
     'move_calc_logic': moe_2.move_calc_logic,
     'slice_prob_logic': moe_2.slice_prob_logic
 }
+
+# Fix: If the model uses the transformer's embedding, we might need a way to distinguish.
+# But for now, let's add TransformerBlock which is the main missing piece.
+# Actually, let's verify if TokenAndPositionEmbedding is needed.
+# The error message only complained about 'TransformerBlock'.
+
 
 def identify_architecture(model):
     layer_names = [l.name for l in model.layers]
@@ -42,6 +52,7 @@ def identify_architecture(model):
     return 'unknown'
 
 def try_load_model(model_path, config=None):
+    # Try loading with default custom objects (Transformer version favored currently)
     try:
         with tf.keras.utils.custom_object_scope(custom_objects):
             model = tf.keras.models.load_model(model_path, compile=False)
@@ -49,8 +60,22 @@ def try_load_model(model_path, config=None):
             print(f"Successfully loaded model directly. Identified architecture: {arch.upper()} ({model_path})")
             return model
     except Exception as e:
-        print(f"Direct load failed (will try fallback): {e}")
-        pass
+        print(f"Direct load (Transformer preference) failed: {e}")
+        
+        # Retry with MoE-1 TokenAndPositionEmbedding
+        print("Retrying with MoE-1 TokenAndPositionEmbedding...")
+        modified_custom_objects = custom_objects.copy()
+        modified_custom_objects['TokenAndPositionEmbedding'] = moe_1.TokenAndPositionEmbedding
+        
+        try:
+            with tf.keras.utils.custom_object_scope(modified_custom_objects):
+                model = tf.keras.models.load_model(model_path, compile=False)
+                arch = identify_architecture(model)
+                print(f"Successfully loaded model directly (MoE fallback). Identified architecture: {arch.upper()} ({model_path})")
+                return model
+        except Exception as e2:
+            print(f"Direct load (MoE fallback) failed: {e2}")
+            pass
 
     if config:
         try:

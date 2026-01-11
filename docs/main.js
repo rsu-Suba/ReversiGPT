@@ -1,4 +1,5 @@
 import { OthelloBoard } from "./js/OthelloBoard.mjs";
+import { MCTS } from "./js/MCTS.mjs";
 
 const boardElement = document.getElementById("board");
 const currentPlayerSpan = document.getElementById("current-player");
@@ -12,10 +13,15 @@ let gameBoard;
 let aiModel;
 let humanPlayer;
 
+const MCTS_SIMS = 20;
+const MCTS_PUCT = 3.0;
+
 async function initGame() {
    await tf.ready();
    gameBoard = new OthelloBoard();
    await loadModel();
+
+   console.log(`AI Configuration: Sims=${MCTS_SIMS}, PUCT=${MCTS_PUCT}`);
 
    humanPlayer = Math.random() < 0.5 ? 1 : 2;
    gameBoard.currentPlayer = 1;
@@ -71,7 +77,7 @@ function updateGameInfo() {
    const humanPlayerName = humanPlayer === 1 ? "Black (You)" : "White (You)";
    const aiPlayerName = humanPlayer === 1 ? "White (AI)" : "Black (AI)";
 
-   currentPlayerSpan.textContent = `${
+   currentPlayerSpan.textContent = `${ 
       gameBoard.currentPlayer === humanPlayer ? "Player" : "AI"
    } (${currentPlayerName})`;
    blackScoreSpan.textContent = gameBoard.countSetBits(gameBoard.blackBoard);
@@ -134,52 +140,52 @@ async function handleMove(move) {
 async function makeAIMove() {
    if (gameBoard.isGameOver()) return;
    console.log("AI is thinking...");
-   setTimeout(async () => {
-      const inputTensor = tf.tensor4d([gameBoard.boardToInputPlanes()], [1, 8, 8, 2], "float32");
-      const predictions = aiModel.predict(inputTensor);
-      
-      // Debug: Check output shapes
-      if (Array.isArray(predictions)) {
-         // console.log("Predictions shapes:", predictions.map(p => p.shape));
-      } else {
-         // console.log("Prediction shape:", predictions.shape);
-      }
+   
+   // Allow UI to update before heavy calculation
+   await new Promise(r => setTimeout(r, 50));
 
-      // predictions[0] should be Policy (64), predictions[1] is Value (1)
-      // Check which one has size 64
-      let policyOutput;
-      if (Array.isArray(predictions)) {
-          if (predictions[0].size === 64) {
-              policyOutput = predictions[0].dataSync();
-          } else {
-              policyOutput = predictions[1].dataSync();
-          }
-      } else {
-          policyOutput = predictions.dataSync();
-      }
+   const mcts = new MCTS(aiModel, MCTS_PUCT);
+   // Run simulations
+   const root = await mcts.search(gameBoard, MCTS_SIMS);
 
-      const legalMoves = gameBoard.getLegalMoves();
-      let bestMove = -1;
-      let maxPolicy = -1;
+   const children = Object.values(root.children);
+   if (children.length === 0) {
+       console.warn("AI has no moves.");
+       return;
+   }
 
-      for (const move of legalMoves) {
-         if (policyOutput[move] > maxPolicy) {
-            maxPolicy = policyOutput[move];
-            bestMove = move;
-         }
-      }
+   // Sort by visits (descending)
+   children.sort((a, b) => b.visits - a.visits);
+   
+   const bestChild = children[0];
+   const bestMove = bestChild.move;
 
-      if (bestMove !== -1) {
-         gameBoard.applyMove(bestMove);
-         renderBoard();
-         updateGameInfo();
-      } else {
-         console.warn("AI could not find a legal move. Passing turn.");
-         gameBoard.applyMove(-1);
-         renderBoard();
-         updateGameInfo();
-      }
-   }, 400);
+   // Log Top 5
+   let logMsg = "--- AI Search Results ---\n";
+   logMsg += `Best Move: ${indexToCoord(bestMove)} (Visits: ${bestChild.visits}, Q: ${(-bestChild.qValue).toFixed(4)})\n`;
+   
+   children.slice(0, 5).forEach((child, i) => {
+       logMsg += `${i+1}. ${indexToCoord(child.move)}: Visits=${child.visits}, Q=${(-child.qValue).toFixed(4)}\n`;
+   });
+   logMsg += "-------------------------";
+   console.log(logMsg);
+
+   if (bestMove !== -1) {
+      gameBoard.applyMove(bestMove);
+   } else {
+      console.log("AI Passes.");
+      gameBoard.applyMove(-1);
+   }
+   
+   renderBoard();
+   updateGameInfo();
+}
+
+function indexToCoord(index) {
+    if (index === -1) return "PASS";
+    const r = Math.floor(index / 8);
+    const c = index % 8;
+    return String.fromCharCode(65 + c) + (r + 1);
 }
 
 resetButton.addEventListener("click", () => {

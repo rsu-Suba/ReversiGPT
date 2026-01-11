@@ -1,5 +1,9 @@
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from absl import logging
+logging.set_verbosity(logging.ERROR)
 import sys
+
 import numpy as np
 import tensorflow as tf
 import msgpack
@@ -8,7 +12,15 @@ import multiprocessing
 from multiprocessing import shared_memory
 import traceback
 from tqdm import tqdm
+import logging
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=Warning)
+tf.get_logger().setLevel('INFO')
+tf.autograph.set_verbosity(0)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
+from AI.log_filter import install_log_filter
+install_log_filter()
 from AI.models.model_selector import try_load_model
 from AI.config import TRAINING_DATA_DIR
 from AI.config_loader import load_config
@@ -20,13 +32,11 @@ except ImportError:
     print("FATAL: C++ MCTS module not found.")
     sys.exit(1)
 
-GEN_SIMS_N = 800
-GEN_GAMES_PER_ITER = 50
-NUM_WORKERS = 25
-WORKER_BATCH_SIZE = 20
+GEN_SIMS_N = 1000
+GEN_GAMES_PER_ITER = 200
+NUM_WORKERS = 40
+WORKER_BATCH_SIZE = 40
 MAX_BATCH = NUM_WORKERS * WORKER_BATCH_SIZE
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 STATUS_IDLE = 0
 STATUS_REQ_READY = 1
@@ -151,7 +161,7 @@ class RemoteModelWrapper:
             s = global_arrays['status'][self.worker_id]
             if s == STATUS_RES_READY: break
             if s == STATUS_ERROR: raise RuntimeError("Server Error")
-            if time.time() - start > 60: raise TimeoutError("Timeout")
+            if time.time() - start > 600: raise TimeoutError("Timeout")
             time.sleep(0.0001)
         policies = global_arrays['output_policy'][self.worker_id, :n_samples, :].copy()
         values = global_arrays['output_value'][self.worker_id, :n_samples].copy()
@@ -172,7 +182,7 @@ def worker_init(id_queue, shm_names, shapes):
 def play_one_game(_):
     try:
         wrapper = RemoteModelWrapper()
-        mcts = MCTS_CPP(wrapper, c_puct=5.0, batch_size=WORKER_BATCH_SIZE)
+        mcts = MCTS_CPP(wrapper, c_puct=2.3, batch_size=WORKER_BATCH_SIZE)
         board = ReversiBitboard()
         history = []
         while not board.is_game_over():
@@ -234,7 +244,7 @@ def main():
         stop_event = ctx.Event()
         server = ctx.Process(target=prediction_worker, args=(model_path, shm_names, shapes, stop_event))
         server.start()
-        time.sleep(10)
+        time.sleep(30)
         
         start_time = time.time()
         games_collected = []
