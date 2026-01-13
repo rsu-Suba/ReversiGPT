@@ -39,7 +39,7 @@ let settings = {
     legalMoves: true,
 };
 
-const MCTS_SIMS = 25;
+const MCTS_SIMS = 30;
 const MCTS_PUCT = 1.3;
 
 async function initGame() {

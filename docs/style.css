@@ -328,6 +328,11 @@ input:checked + .slider:before {
     text-align: center;
 }
 
+.debug-boards {
+    display: flex;
+    gap: 40px;
+}
+
 .small-board {
     display: grid;
     grid-template-columns: repeat(8, 40px);
@@ -454,6 +459,11 @@ input:checked + .slider:before {
     .debug-controls button {
         width: 90%;
         padding: 8px 0;
+    }
+
+    .debug-boards {
+        flex-direction: column;
+        gap: 0px;
     }
 
     #debug-start {
