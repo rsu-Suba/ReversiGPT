@@ -39,8 +39,8 @@ let settings = {
     legalMoves: true,
 };
 
-const MCTS_SIMS = 20;
-const MCTS_PUCT = 1.6;
+const MCTS_SIMS = 25;
+const MCTS_PUCT = 1.3;
 
 async function initGame() {
     await tf.ready();

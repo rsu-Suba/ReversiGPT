@@ -57,7 +57,7 @@ h1 {
     width: 440px;
     height: 440px;
     overflow: hidden;
-    border-radius: 8px;
+    border-radius: 20px;
 }
 
 .cell {
@@ -104,6 +104,7 @@ h1 {
     border-radius: 20px;
     box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
     width: 100%;
+    max-width: 440px;
     text-align: center;
 }
 
@@ -114,7 +115,7 @@ h1 {
 }
 
 .settings-panel {
-    border-radius: 8px;
+    border-radius: 20px;
     background: linear-gradient(135deg, #bea8e1, #a689b6);
     box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
     display: flex;
@@ -128,7 +129,6 @@ h1 {
     gap: 20px;
     top: 0;
     left: 0;
-    z-index: 20;
 
     transform: translateY(100%);
     pointer-events: none;
@@ -247,7 +247,7 @@ input:checked + .slider:before {
 #review-button,
 #settings-button {
     font-family: "Outfit", sans-serif !important;
-    margin-top: 20px;
+    margin-top: 10px;
     padding: 12px 25px;
     font-size: 1.1em;
     cursor: pointer;
@@ -324,6 +324,7 @@ input:checked + .slider:before {
 }
 
 .debug-board-container {
+    margin-top: 20px;
     text-align: center;
 }
 
@@ -418,6 +419,7 @@ input:checked + .slider:before {
 
     #game-info {
         padding: 15px;
+        max-width: 320px;
     }
 
     #game-info p {
@@ -427,6 +429,8 @@ input:checked + .slider:before {
     .message {
         font-size: 0.9em;
         padding: 8px;
+        width: 90%;
+        margin: auto;
     }
 
     #reset-button,
@@ -448,8 +452,8 @@ input:checked + .slider:before {
     }
 
     .debug-controls button {
-        width: 100%;
-        padding: 12px 0;
+        width: 90%;
+        padding: 8px 0;
     }
 
     #debug-start {
