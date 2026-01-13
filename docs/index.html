@@ -1,29 +1,83 @@
 <!DOCTYPE html>
 <html lang="ja">
-   <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Reversi AI</title>
-      <link rel="stylesheet" href="style.css" />
-      <link rel="icon" href="favicon.ico">
-   </head>
-   <body>
-      <div id="game-container">
-         <div id="board"></div>
-         <div id="game-info">
-            <p>Turn: <span id="current-player"></span></p>
-            <p>Black: <span id="black-score"></span></p>
-            <p>White: <span id="white-score"></span></p>
-            <div id="game-message" class="message"></div>
-            <button id="reset-button">Reset Game</button>
-         </div>
-      </div>
-      <div id="temp-message" class="temp-message"></div>
-      <p class="dev-text">
-         Model : Transformer MoE-1 (Dec 17 '25)<br />
-         <a href="https://github.com/rsu-Suba/ReversiGPT">Github Repo</a>
-      </p>
-      <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-      <script type="module" src="main.js"></script>
-   </body>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Reversi AI</title>
+        <link rel="stylesheet" href="style.css" />
+        <link rel="icon" href="favicon.ico" />
+    </head>
+    <body>
+        <div id="game-container">
+            <div class="board-wrapper">
+                <div id="board"></div>
+            <div id="settings-panel" class="settings-panel">
+                <div class="setting-row">
+                    <span class="setting-label">AI Heatmap</span>
+                    <label class="switch">
+                        <input type="checkbox" id="opt-heatmap" />
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">AI Lines</span>
+                    <label class="switch">
+                        <input type="checkbox" id="opt-lines" />
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Legal Cells</span>
+                    <label class="switch">
+                        <input type="checkbox" id="opt-legal" />
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+                <svg id="main-overlay" width="440" height="440"></svg>
+            </div>
+            <div id="game-info">
+                <p>Turn: <span id="current-player"></span></p>
+                <p>Black: <span id="black-score"></span></p>
+                <p>White: <span id="white-score"></span></p>
+
+                <div id="game-message" class="message"></div>
+                <button id="reset-button">Reset Game</button>
+                <button id="settings-button">Settings</button>
+                <button id="review-button" style="display: none">Review Game</button>
+            </div>
+        </div>
+
+        <div id="debug-view" class="hidden">
+            <div class="debug-controls">
+                <button id="debug-start">|&lt;</button>
+                <button id="debug-prev">&lt;</button>
+                <span id="debug-counter">Move: 0 / 0</span>
+                <button id="debug-next">&gt;</button>
+                <button id="debug-end">&gt;|</button>
+                <button id="debug-close">Close</button>
+            </div>
+            <div class="debug-boards">
+                <div class="debug-board-container">
+                    <h3>Placement (Before Flip)</h3>
+                    <div id="debug-board-left" class="small-board"></div>
+                </div>
+                <div class="debug-board-container">
+                    <h3>Result (After Flip)</h3>
+                    <div class="board-wrapper">
+                        <div id="debug-board-right" class="small-board"></div>
+                        <svg id="debug-overlay" width="320" height="320"></svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="temp-message" class="temp-message"></div>
+        <p class="dev-text">
+            Model : Transformer MoE-1 (Dec 17 '25)<br />
+            <a href="https://github.com/rsu-Suba/ReversiGPT">Github Repo</a>
+        </p>
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+        <script type="module" src="main.js"></script>
+    </body>
 </html>
